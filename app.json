@@ -1,1 +1,33 @@
-{"expo":{"name":"Sleeping Stock Mobile","slug":"sleeping-stock-mobile","version":"1.0.0","orientation":"portrait","android":{"package":"in.sleepingstock.mobile","versionCode":1,"permissions":["CAMERA","POST_NOTIFICATIONS","INTERNET","VIBRATE","RECEIVE_BOOT_COMPLETED"]},"plugins": ["expo-secure-store","expo-notifications"],"extra":{"apiUrl":"http://10.0.2.2:8000/api/mobile/v2","eas":{"projectId":"REPLACE_WITH_EAS_PROJECT_ID"}}}}
+{
+  "expo": {
+    "name": "Sleeping Stock Mobile",
+    "slug": "sleeping-stock-mobile",
+    "version": "1.0.0",
+    "orientation": "portrait",
+    "android": {
+      "package": "in.sleepingstock.mobile",
+      "versionCode": 1,
+      "permissions": [
+        "CAMERA",
+        "POST_NOTIFICATIONS",
+        "INTERNET",
+        "VIBRATE",
+        "RECEIVE_BOOT_COMPLETED"
+      ]
+    },
+    "plugins": [
+      "expo-secure-store",
+      "expo-notifications"
+    ],
+    "extra": {
+      "apiUrl": "http://10.0.2.2:8000/api/mobile/v2",
+      "extra": {
+        "apiUrl": "http://10.0.2.2:8000/api/mobile/v2"
+      },
+      "eas": {
+        "projectId": "545530df-24b8-4e30-a35d-0fb66b3c3f81"
+      }
+    },
+    "owner": "naveensleep"
+  }
+}
