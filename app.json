@@ -29,7 +29,15 @@
           "color": "#176b43",
           "defaultChannel": "nmts-alerts"
         }
-      ]
+      ],
+      [
+  "expo-build-properties",
+  {
+    "android": {
+      "minSdkVersion": 26
+    }
+  }
+]
     ],
     "extra": {
       "apiUrl": "https://your-domain.example/api/mobile/v2",
