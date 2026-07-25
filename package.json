@@ -1,31 +1,56 @@
 {
   "name": "sleeping-stock-mobile",
-  "version": "1.0.0",
+  "version": "1.0.1",
+  "private": true,
   "main": "node_modules/expo/AppEntry.js",
   "scripts": {
     "start": "expo start --dev-client",
-    "export:android": "expo export --platform android",
-    "build:android": "eas build --platform android --profile preview"
+    "android": "expo run:android",
+    "ios": "expo run:ios",
+    "prebuild": "expo prebuild --clean",
+    "doctor": "npx expo-doctor@latest",
+    "build:apk": "eas build --platform android --profile preview --clear-cache",
+    "build:release": "eas build --platform android --profile production --clear-cache"
   },
   "dependencies": {
+    "@react-native-community/netinfo": "11.4.1",
+    "axios": "^1.11.0",
     "expo": "~54.0.0",
-    "expo-camera": "~17.0.10",
-    "expo-dev-client": "~6.0.17",
-    "expo-text-extractor": "2.0.0",
-    "react": "19.1.0",
-    "react-native": "0.81.4",
-    "@expo/vector-icons": "^15.0.3",
+    "expo-application": "~7.0.7",
+    "expo-build-properties": "~1.0.10",
     "expo-constants": "~18.0.9",
-    "expo-secure-store": "~15.0.7",
-    "expo-sqlite": "~16.0.8",
-    "expo-crypto": "~15.0.7",
-    "expo-notifications": "~0.32.12",
+    "expo-dev-client": "~6.0.21",
     "expo-device": "~8.0.9",
-    "@react-native-community/netinfo": "11.4.1"
+    "expo-notifications": "~0.32.12",
+    "expo-secure-store": "~15.0.7",
+    "react": "19.1.0",
+    "react-native": "0.81.5",
+    "react-native-nitro-image": "^0.15.1",
+    "react-native-nitro-modules": "^0.36.1",
+    "react-native-vision-camera": "^5.1.1",
+    "react-native-vision-camera-ocr-plus": "^2.0.1",
+    "react-native-vision-camera-worklets": "^5.1.1",
+    "react-native-worklets": "0.8.3"
   },
   "devDependencies": {
     "@babel/core": "^7.25.2",
     "babel-preset-expo": "~54.0.0"
   },
-  "private": true
+  "expo": {
+    "install": {
+      "exclude": [
+        "react-native-worklets"
+      ]
+    },
+    "doctor": {
+      "reactNativeDirectoryCheck": {
+        "enabled": true,
+        "exclude": [
+          "react-native-nitro-image",
+          "react-native-vision-camera-ocr-plus"
+        ],
+        "listUnknownPackages": true
+      }
+    }
+  }
 }
