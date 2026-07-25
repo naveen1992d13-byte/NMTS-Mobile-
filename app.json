@@ -2,55 +2,50 @@
   "expo": {
     "name": "Sleeping Stock Mobile",
     "slug": "sleeping-stock-mobile",
-    "version": "1.0.1",
+    "version": "1.0.0",
     "orientation": "portrait",
+    "userInterfaceStyle": "light",
     "newArchEnabled": true,
     "android": {
       "package": "in.sleepingstock.mobile",
-      "versionCode": 2,
+      "versionCode": 1,
       "permissions": [
         "CAMERA",
-        "POST_NOTIFICATIONS",
-        "INTERNET",
-        "VIBRATE",
-        "RECEIVE_BOOT_COMPLETED"
+        "POST_NOTIFICATIONS"
       ],
       "adaptiveIcon": {
         "foregroundImage": "./assets/adaptive-icon.png",
-        "backgroundColor": "#000000"
+        "backgroundColor": "#050706"
+      }
+    },
+    "extra": {
+      "apiBaseUrl": "https://your-nmts-domain.example.com/api",
+      "eas": {
+        "projectId": "REPLACE_WITH_YOUR_EAS_PROJECT_ID"
       }
     },
     "plugins": [
+      [
+        "expo-camera",
+        {
+          "cameraPermission": "Allow Sleeping Stock Mobile to scan pairing codes and part numbers."
+        }
+      ],
+      "expo-text-extractor",
+      "expo-sqlite",
       "expo-secure-store",
       [
         "expo-notifications",
         {
-          "icon": "./assets/notification-icon.png",
-          "color": "#176b43",
-          "defaultChannel": "nmts-alerts"
+          "color": "#176b43"
         }
-      ],
-      [
-  "expo-build-properties",
-  {
-    "android": {
-      "minSdkVersion": 26
-    }
-  }
-]
+      ]
     ],
-    "extra": {
-      "apiUrl": "https://your-domain.example/api/mobile/v2",
-      "eas": {
-        "projectId": "545530df-24b8-4e30-a35d-0fb66b3c3f81"
-      }
-    },
-    "owner": "naveensleep",
     "icon": "./assets/icon.png",
     "splash": {
-      "image": "./assets/splash.png",
+      "image": "./assets/splash-logo.png",
       "resizeMode": "contain",
-      "backgroundColor": "#000000"
+      "backgroundColor": "#050706"
     }
   }
 }
