@@ -289,7 +289,7 @@ export default function App() {
     setScreen('partScanner');
   };
 
-  const performPairing = async (mobileUserId, pairingCode) => {
+  const performPairing = async (mobileUserId, pairingCode, apiBaseUrl = null, pairingToken = null) => {
     if (!mobileUserId || !pairingCode) {
       Alert.alert('Pairing Code Required', 'Enter the pairing code shown in NMTS Web.');
       return;
@@ -306,15 +306,18 @@ export default function App() {
       const result = await verifyPairing({
         mobileUserId: mobileUserId.trim().toUpperCase(),
         pairingCode: normalizePairingCode(pairingCode),
+        pairingToken,
         deviceUserName: deviceUserName.trim(),
         deviceUserMobile: deviceUserMobile.trim(),
         deviceName,
         deviceInfo,
         appVersion: CURRENT_VERSION_NAME,
         pushToken,
+        apiBaseUrl,
       });
 
       const newSession = {
+        apiBaseUrl: apiBaseUrl || undefined,
         sessionToken: result.session_token,
         deviceId: result.device_id,
         mobileUserId: result.mobile_user_id,
@@ -341,22 +344,40 @@ export default function App() {
     if (scanned || pairing) return;
     setScanned(true);
 
-    let parsedMobileUserId = mobileUserIdInput;
-    let parsedCode = data;
+    let parsedMobileUserId = '';
+    let parsedCode = '';
+    let parsedApiBaseUrl = null;
+    let parsedPairingToken = null;
     try {
       const parsed = JSON.parse(data);
-      if (parsed?.mobile_user_id && parsed?.pairing_code) {
-        parsedMobileUserId = parsed.mobile_user_id;
-        parsedCode = parsed.pairing_code;
+      const isNmtsQr =
+        parsed?.issuer === 'NMTS_SLEEPING_STOCK_PAIRING' &&
+        parsed?.version === 2 &&
+        parsed?.mobile_user_id &&
+        parsed?.pairing_code &&
+        parsed?.pairing_token &&
+        (parsed?.api_base_url || parsed?.apiBaseUrl);
+
+      if (!isNmtsQr) {
+        throw new Error('not-nmts-qr');
       }
+      parsedMobileUserId = String(parsed.mobile_user_id).trim().toUpperCase();
+      parsedCode = String(parsed.pairing_code).trim();
+      parsedApiBaseUrl = parsed.api_base_url || parsed.apiBaseUrl;
+      parsedPairingToken = String(parsed.pairing_token);
     } catch (_e) {
-      // Not JSON — treat the raw scanned value as the pairing code, paired
-      // with whatever Mobile User ID was typed on the previous screen.
+      Alert.alert(
+        'Invalid QR Code',
+        'This scanner accepts only pairing QR codes generated from the NMTS website.'
+      );
+      setScanned(false);
+      return;
     }
 
-    Alert.alert('Pairing Code Detected', `Code: ${parsedCode}`, [
+    const serverLabel = `\nServer: ${parsedApiBaseUrl}`;
+    Alert.alert('Pairing Code Detected', `Code: ${parsedCode}${serverLabel}`, [
       { text: 'Scan Again', style: 'cancel', onPress: () => setScanned(false) },
-      { text: 'Continue', onPress: () => performPairing(parsedMobileUserId, parsedCode) },
+      { text: 'Continue', onPress: () => performPairing(parsedMobileUserId, parsedCode, parsedApiBaseUrl, parsedPairingToken) },
     ]);
   };
 
@@ -809,7 +830,7 @@ export default function App() {
         <View style={styles.card}>
           <Text style={styles.title}>Connect this device</Text>
           <Text style={styles.description}>
-            Scan the pairing QR displayed in NMTS Web or enter the pairing code manually.
+            Scan only the secure pairing QR displayed in NMTS Web.
           </Text>
 
           <View style={styles.userSummary}>
@@ -827,21 +848,6 @@ export default function App() {
             <Text style={styles.primaryButtonText}>Scan Pairing QR Code</Text>
           </TouchableOpacity>
 
-          <View style={styles.orRow}>
-            <View style={styles.line} />
-            <Text style={styles.orText}>OR</Text>
-            <View style={styles.line} />
-          </View>
-
-          <TouchableOpacity
-            style={styles.secondaryButton}
-            onPress={() => {
-              setManualCode('');
-              setScreen('manual');
-            }}
-          >
-            <Text style={styles.secondaryButtonText}>Enter Pairing Code Manually</Text>
-          </TouchableOpacity>
         </View>
       </ScrollView>
     </View>
@@ -897,15 +903,7 @@ export default function App() {
             <Text style={styles.scanInstruction}>Place the NMTS pairing QR code inside the frame</Text>
           </View>
           <View style={styles.scannerBottom}>
-            <TouchableOpacity
-              style={styles.manualLinkButton}
-              onPress={() => {
-                setScanned(false);
-                setScreen('manual');
-              }}
-            >
-              <Text style={styles.manualLinkText}>Enter code manually</Text>
-            </TouchableOpacity>
+<Text style={styles.scanInstruction}>Only NMTS Web-generated QR codes are accepted.</Text>
           </View>
         </View>
         {pairing && (

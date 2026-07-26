@@ -19,10 +19,7 @@
       }
     },
     "extra": {
-      "apiBaseUrl": "https://your-nmts-domain.example.com/api",
-      "eas": {
-        "projectId": "REPLACE_WITH_YOUR_EAS_PROJECT_ID"
-      }
+      "apiBaseUrl": ""
     },
     "plugins": [
       [
@@ -31,7 +28,6 @@
           "cameraPermission": "Allow Sleeping Stock Mobile to scan pairing codes and part numbers."
         }
       ],
-      "expo-text-extractor",
       "expo-sqlite",
       "expo-secure-store",
       [
