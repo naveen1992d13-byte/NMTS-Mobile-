@@ -1,13 +1,21 @@
-// Environment configuration for Sleeping Stock Mobile.
-//
-// The API base URL is read from app.json -> expo.extra.apiBaseUrl so the
-// same APK/build can be pointed at different backends (staging/production)
-// without code changes. Override per-build with:
-//   EXPO_PUBLIC_API_BASE_URL=https://your-domain.example.com/api eas build ...
-// (Expo automatically exposes EXPO_PUBLIC_* env vars at build time.)
 import Constants from 'expo-constants';
 
-const fallbackApiBaseUrl = 'https://your-nmts-domain.example.com/api';
+const fallbackApiBaseUrl = '';
+
+export function normalizeApiBaseUrl(value) {
+  const raw = String(value || '').trim().replace(/\/+$/, '');
+  if (!raw) throw new Error('NMTS server URL is not configured.');
+  let parsed;
+  try {
+    parsed = new URL(raw);
+  } catch {
+    throw new Error('The NMTS server URL in the QR code is invalid.');
+  }
+  if (parsed.protocol !== 'https:') {
+    throw new Error('Only secure HTTPS NMTS server URLs are allowed.');
+  }
+  return raw;
+}
 
 export const API_BASE_URL =
   process.env.EXPO_PUBLIC_API_BASE_URL ||
