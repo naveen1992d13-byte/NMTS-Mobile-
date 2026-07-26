@@ -6,12 +6,20 @@
     "orientation": "portrait",
     "userInterfaceStyle": "light",
     "newArchEnabled": true,
+    "icon": "./assets/icon.png",
+    "splash": {
+      "image": "./assets/splash-logo.png",
+      "resizeMode": "contain",
+      "backgroundColor": "#050706"
+    },
     "android": {
       "package": "in.sleepingstock.mobile",
       "versionCode": 1,
       "permissions": [
         "CAMERA",
-        "POST_NOTIFICATIONS"
+        "POST_NOTIFICATIONS",
+        "android.permission.CAMERA",
+        "android.permission.RECORD_AUDIO"
       ],
       "adaptiveIcon": {
         "foregroundImage": "./assets/adaptive-icon.png",
@@ -19,7 +27,10 @@
       }
     },
     "extra": {
-      "apiBaseUrl": ""
+      "apiBaseUrl": "https://your-nmts-domain.example.com/api",
+      "eas": {
+        "projectId": "REPLACE_WITH_YOUR_EAS_PROJECT_ID"
+      }
     },
     "plugins": [
       [
@@ -37,11 +48,12 @@
         }
       ]
     ],
-    "icon": "./assets/icon.png",
-    "splash": {
-      "image": "./assets/splash-logo.png",
-      "resizeMode": "contain",
-      "backgroundColor": "#050706"
-    }
+    "extra": {
+      "apiBaseUrl": "https://your-nmts-domain.example.com/api",
+      "eas": {
+        "projectId": "545530df-24b8-4e30-a35d-0fb66b3c3f81"
+      }
+    },
+    "owner": "naveensleep"
   }
 }
