@@ -10,6 +10,7 @@ const SESSION_KEY = 'sleeping_stock_mobile_session_v1';
 
 /**
  * @typedef {Object} MobileSession
+ * @property {string} apiBaseUrl
  * @property {string} sessionToken
  * @property {string} deviceId
  * @property {string} mobileUserId
