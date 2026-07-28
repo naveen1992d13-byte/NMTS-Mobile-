@@ -29,9 +29,7 @@ function errorFromAxios(error) {
   if (error instanceof ApiError) return error;
   const status = error?.response?.status || 0;
   const detail = error?.response?.data?.detail;
-  const message = typeof detail === 'string'
-    ? detail
-    : error?.message || 'Unable to connect to the NMTS server.';
+  const message = typeof detail === 'string' ? detail : error?.message || 'Unable to connect to the NMTS server.';
   const kind = status === 401 || status === 403 ? 'auth' : status ? 'server' : 'network';
   return new ApiError(message, { status, kind, data: error?.response?.data || null });
 }
@@ -45,14 +43,7 @@ async function request(method, path, { data, params, auth = true, baseUrl } = {}
       if (!token) throw new ApiError('Device session not found. Please pair this device again.', { status: 401, kind: 'auth' });
       headers.Authorization = `Bearer ${token}`;
     }
-    const response = await axios({
-      method,
-      url: `${resolvedBaseUrl}${path}`,
-      data,
-      params,
-      headers,
-      timeout: REQUEST_TIMEOUT_MS,
-    });
+    const response = await axios({ method, url: `${resolvedBaseUrl}${path}`, data, params, headers, timeout: REQUEST_TIMEOUT_MS });
     return response.data;
   } catch (rawError) {
     const error = errorFromAxios(rawError);
@@ -64,32 +55,22 @@ async function request(method, path, { data, params, auth = true, baseUrl } = {}
   }
 }
 
-export const verifyPairing = ({
-  mobileUserId,
-  pairingCode,
-  pairingToken,
-  deviceUserName,
-  deviceUserMobile,
-  deviceName,
-  deviceInfo,
-  appVersion,
-  pushToken,
-  apiBaseUrl,
-}) => request('post', '/mobile/pairing/verify', {
-  auth: false,
-  baseUrl: apiBaseUrl,
-  data: {
-    mobile_user_id: mobileUserId,
-    pairing_code: pairingCode,
-    pairing_token: pairingToken || null,
-    device_user_name: deviceUserName,
-    device_user_mobile: deviceUserMobile,
-    device_name: deviceName,
-    device_info: deviceInfo,
-    app_version: appVersion,
-    push_token: pushToken,
-  },
-});
+export const verifyPairing = ({ mobileUserId, pairingCode, pairingToken, deviceUserName, deviceUserMobile, deviceName, deviceInfo, appVersion, pushToken, apiBaseUrl }) =>
+  request('post', '/mobile/pairing/verify', {
+    auth: false,
+    baseUrl: apiBaseUrl,
+    data: {
+      mobile_user_id: mobileUserId,
+      pairing_code: pairingCode,
+      pairing_token: pairingToken || null,
+      device_user_name: deviceUserName,
+      device_user_mobile: deviceUserMobile,
+      device_name: deviceName,
+      device_info: deviceInfo,
+      app_version: appVersion,
+      push_token: pushToken,
+    },
+  });
 
 export const validateSession = () => request('get', '/mobile/session/validate');
 export const registerPushToken = (pushToken) => request('put', '/mobile/devices/push-token', { data: { push_token: pushToken } });
@@ -108,22 +89,10 @@ export const submitPartResponse = (requestGroupKey, parts) => request('post', '/
   },
 });
 export const submitStockVerification = ({ partNumber, physicalQty, location, remark, entryMethod, clientId }) => request('post', '/mobile/stock-verification', {
-  data: {
-    part_number: partNumber,
-    physical_qty: physicalQty,
-    location,
-    remark,
-    entry_method: entryMethod,
-    client_id: clientId,
-  },
+  data: { part_number: partNumber, physical_qty: physicalQty, location, remark, entry_method: entryMethod, client_id: clientId },
 });
 export const getStockVerificationHistory = (options = {}) => request('get', '/mobile/stock-verification/history', {
-  params: typeof options === 'string'
-    ? { part_number: options }
-    : {
-        ...(options.partNumber ? { part_number: options.partNumber } : {}),
-        ...(options.limit ? { limit: options.limit } : {}),
-      },
+  params: typeof options === 'string' ? { part_number: options } : { ...(options.partNumber ? { part_number: options.partNumber } : {}), ...(options.limit ? { limit: options.limit } : {}) },
 });
 export const searchStock = (partNumbers) => request('get', '/mobile/stock-search', {
   params: { part_numbers: Array.isArray(partNumbers) ? partNumbers.join('\n') : partNumbers },
