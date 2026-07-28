@@ -1,24 +1,6 @@
-// Secure storage for the paired device's session token.
-//
-// The session token is the device's permanent login (Part 10 of the spec —
-// "keep the user logged in, do not require daily login"), so it must live
-// in encrypted storage (expo-secure-store / Android Keystore-backed), never
-// in AsyncStorage/plain JSON.
 import * as SecureStore from 'expo-secure-store';
 
 const SESSION_KEY = 'sleeping_stock_mobile_session_v1';
-
-/**
- * @typedef {Object} MobileSession
- * @property {string} apiBaseUrl
- * @property {string} sessionToken
- * @property {string} deviceId
- * @property {string} mobileUserId
- * @property {string} name
- * @property {string} brandName
- * @property {string} dealerName
- * @property {string} branch
- */
 
 export async function saveSession(session) {
   try {
@@ -30,7 +12,6 @@ export async function saveSession(session) {
   }
 }
 
-/** @returns {Promise<MobileSession|null>} */
 export async function getSession() {
   try {
     const raw = await SecureStore.getItemAsync(SESSION_KEY);
