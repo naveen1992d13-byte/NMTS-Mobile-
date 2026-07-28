@@ -4,13 +4,15 @@ const fallbackApiBaseUrl = '';
 
 export function normalizeApiBaseUrl(value) {
   const raw = String(value || '').trim().replace(/\/+$/, '');
-  if (!raw) throw new Error('NMTS server URL is not configured.');
+  if (!raw) throw new Error('NMTS server URL is not configured. Scan the pairing QR from the NMTS website.');
+
   let parsed;
   try {
     parsed = new URL(raw);
   } catch {
     throw new Error('The NMTS server URL in the QR code is invalid.');
   }
+
   if (parsed.protocol !== 'https:') {
     throw new Error('Only secure HTTPS NMTS server URLs are allowed.');
   }
