@@ -2,7 +2,7 @@
   "expo": {
     "name": "Sleeping Stock Mobile",
     "slug": "sleeping-stock-mobile",
-    "version": "1.0.0",
+    "version": "1.1.1",
     "orientation": "portrait",
     "userInterfaceStyle": "light",
     "newArchEnabled": true,
@@ -14,29 +14,22 @@
     },
     "android": {
       "package": "in.sleepingstock.mobile",
-      "versionCode": 1,
+      "versionCode": 3,
       "permissions": [
         "CAMERA",
-        "POST_NOTIFICATIONS",
-        "android.permission.CAMERA",
-        "android.permission.RECORD_AUDIO"
+        "POST_NOTIFICATIONS"
       ],
       "adaptiveIcon": {
         "foregroundImage": "./assets/adaptive-icon.png",
         "backgroundColor": "#050706"
       }
     },
-    "extra": {
-      "apiBaseUrl": "https://your-nmts-domain.example.com/api",
-      "eas": {
-        "projectId": "REPLACE_WITH_YOUR_EAS_PROJECT_ID"
-      }
-    },
     "plugins": [
       [
         "expo-camera",
         {
-          "cameraPermission": "Allow Sleeping Stock Mobile to scan pairing codes and part numbers."
+          "cameraPermission": "Allow Sleeping Stock Mobile to scan pairing codes and part numbers.",
+          "recordAudioAndroid": false
         }
       ],
       "expo-sqlite",
@@ -44,12 +37,11 @@
       [
         "expo-notifications",
         {
-          "color": "#176b43"
+          "color": "#2458c6"
         }
       ]
     ],
     "extra": {
-      "apiBaseUrl": "https://your-nmts-domain.example.com/api",
       "eas": {
         "projectId": "545530df-24b8-4e30-a35d-0fb66b3c3f81"
       }
