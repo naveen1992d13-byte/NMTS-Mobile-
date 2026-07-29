@@ -2,9 +2,7 @@ export function normalizePartNumber(value) {
   return String(value || '')
     .trim()
     .toUpperCase()
-    .replace(/\s+/g, '')
-    .replace(/[—–_]/g, '-')
-    .replace(/[^A-Z0-9\-/]/g, '');
+    .replace(/[^A-Z0-9]/g, '');
 }
 
 export function splitPartNumbers(value) {
