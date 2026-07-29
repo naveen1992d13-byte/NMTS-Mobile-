@@ -21,8 +21,7 @@ const BOX_HEIGHT = 150;
 function cleanPartNumber(rawText) {
   const normalized = String(rawText || '')
     .toUpperCase()
-    .replace(/[—–_]/g, '-')
-    .replace(/[^A-Z0-9\-/\s]/g, ' ')
+    .replace(/[^A-Z0-9\s]/g, ' ')
     .replace(/\s+/g, ' ')
     .trim();
 
@@ -36,8 +35,7 @@ function cleanPartNumber(rawText) {
       let score = 0;
       if (/[A-Z]/.test(value)) score += 3;
       if (/[0-9]/.test(value)) score += 3;
-      if (/[-/]/.test(value)) score += 3;
-      if (/^[A-Z0-9\-/]+$/.test(value)) score += 2;
+      if (/^[A-Z0-9]+$/.test(value)) score += 2;
       return { value, score };
     })
     .filter((item) => item.score >= 7)
