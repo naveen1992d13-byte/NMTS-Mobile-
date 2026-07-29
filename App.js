@@ -3,7 +3,9 @@ import {
   ActivityIndicator,
   Alert,
   Animated,
+  BackHandler,
   FlatList,
+  Image,
   KeyboardAvoidingView,
   Platform,
   SafeAreaView,
@@ -23,7 +25,7 @@ import * as Device from 'expo-device';
 import Constants from 'expo-constants';
 import NetInfo from '@react-native-community/netinfo';
 
-import { getSession, saveSession, clearSession } from './src/services/session';
+import { getSession, saveSession, clearSession, getDailyVerificationSessionId } from './src/services/session';
 import {
   ApiError,
   setOnSessionInvalidated,
@@ -68,18 +70,41 @@ function friendlyError(error) {
 function cleanPartNumber(value) {
   return String(value || '')
     .toUpperCase()
-    .replace(/\s+/g, '')
-    .replace(/[^A-Z0-9-]/g, '')
+    .replace(/[^A-Z0-9]/g, '')
     .slice(0, 40);
 }
 
-function extractPartNumber(text) {
-  const tokens = String(text || '')
-    .toUpperCase()
-    .split(/[\s\n\r,;:|]+/)
-    .map(cleanPartNumber)
-    .filter((token) => token.length >= 5 && /[A-Z]/.test(token) && /\d/.test(token));
-  return tokens.sort((a, b) => b.length - a.length)[0] || '';
+function extractPartDetails(text) {
+  const rawLines = String(text || '')
+    .split(/[\n\r]+/)
+    .map((line) => line.trim())
+    .filter(Boolean);
+
+  const tokenCandidates = rawLines
+    .flatMap((line) => line.split(/[\s,;:|]+/))
+    .map((raw) => ({ raw, cleaned: cleanPartNumber(raw) }))
+    .filter(({ cleaned }) => cleaned.length >= 4 && cleaned.length <= 40)
+    .map((item) => {
+      let score = 0;
+      if (/\d/.test(item.cleaned)) score += 4;
+      if (/[A-Z]/.test(item.cleaned)) score += 4;
+      if (item.cleaned.length >= 7) score += 2;
+      if (item.cleaned.length >= 10) score += 1;
+      return { ...item, score };
+    })
+    .filter((item) => item.score >= 6)
+    .sort((a, b) => b.score - a.score || b.cleaned.length - a.cleaned.length);
+
+  const partNumber = tokenCandidates[0]?.cleaned || '';
+  const description = rawLines
+    .filter((line) => cleanPartNumber(line) !== partNumber)
+    .filter((line) => /[A-Za-z]{3,}/.test(line))
+    .join(' ')
+    .replace(/\s+/g, ' ')
+    .trim()
+    .slice(0, 160);
+
+  return { partNumber, description };
 }
 
 function numberValue(value) {
@@ -143,6 +168,7 @@ export default function App() {
   const [physicalQty, setPhysicalQty] = useState('');
   const [physicalLocation, setPhysicalLocation] = useState('');
   const [verificationRemark, setVerificationRemark] = useState('');
+  const [scannedPartDescription, setScannedPartDescription] = useState('');
   const [selectedPart, setSelectedPart] = useState(null);
   const [verificationList, setVerificationList] = useState([]);
   const [verificationBusy, setVerificationBusy] = useState(false);
@@ -232,6 +258,43 @@ export default function App() {
       .catch(() => {});
     return () => teardown();
   }, [session?.deviceId, screen]);
+
+
+  useEffect(() => {
+    const handleHardwareBack = () => {
+      if (booting) return true;
+
+      if (screen === 'scanner') {
+        setPairingScanned(false);
+        setOcrBusy(false);
+        setScreen(
+          scannerTarget === 'pairing'
+            ? 'pair'
+            : scannerTarget === 'verification'
+              ? 'verification'
+              : 'search'
+        );
+        return true;
+      }
+
+      if (screen === 'request') {
+        setScreen('notifications');
+        return true;
+      }
+
+      if (screen === 'verification' || screen === 'search' || screen === 'notifications') {
+        setScreen('home');
+        return true;
+      }
+
+      // Do not let Android close the app from the Home or Pairing screen.
+      // The user can use the visible Logout action when required.
+      return true;
+    };
+
+    const subscription = BackHandler.addEventListener('hardwareBackPress', handleHardwareBack);
+    return () => subscription.remove();
+  }, [booting, screen, scannerTarget]);
 
   useEffect(() => {
     if (screen !== 'scanner') return undefined;
@@ -339,16 +402,18 @@ Server: ${apiBaseUrl}`, [
         { compress: 1, format: ImageManipulator.SaveFormat.JPEG }
       );
       const lines = await extractTextFromImage(cropped.uri);
-      const detected = extractPartNumber(Array.isArray(lines) ? lines.join(' ') : lines);
+      const recognizedText = Array.isArray(lines) ? lines.join('\n') : String(lines || '');
+      const { partNumber: detected, description } = extractPartDetails(recognizedText);
       if (!detected) {
         Alert.alert('Not Detected', 'Keep only the part number inside the scan box and try again.');
         return;
       }
       await Haptics.notificationAsync(Haptics.NotificationFeedbackType.Success);
       if (scannerTarget === 'verification') {
+        setScannedPartDescription(description || '');
         setVerificationInput(detected);
         setScreen('verification');
-        await lookupVerificationPart(detected);
+        await lookupVerificationPart(detected, description || '');
       } else {
         setSearchParts((current) => (current.includes(detected) ? current : [...current, detected]));
         setSearchInput('');
@@ -361,7 +426,7 @@ Server: ${apiBaseUrl}`, [
     }
   };
 
-  const lookupVerificationPart = async (partNumber = verificationInput) => {
+  const lookupVerificationPart = async (partNumber = verificationInput, detectedDescription = scannedPartDescription) => {
     const cleaned = cleanPartNumber(partNumber);
     if (!cleaned) {
       Alert.alert('Part Number', 'Enter or scan a part number.');
@@ -374,12 +439,35 @@ Server: ${apiBaseUrl}`, [
         (response?.results || []).map(mapStockRow)[0];
       if (!match) {
         setSelectedPart(null);
-        Alert.alert('Not Found', 'Part number was not found in this paired branch.');
+        Alert.alert(
+          'Part Not Found',
+          'This part number is not available in the paired branch data. Do you want to add it as an excess new part?',
+          [
+            { text: 'Cancel', style: 'cancel' },
+            {
+              text: 'Add New Part',
+              onPress: () => {
+                setVerificationInput(cleaned);
+                setSelectedPart({
+                  partNumber: cleaned,
+                  partName: detectedDescription || '',
+                  systemQty: 0,
+                  availableQty: 0,
+                  systemLocation: '-',
+                  unitValue: 0,
+                  isNewPart: true,
+                });
+                setPhysicalLocation('');
+              },
+            },
+          ]
+        );
         return;
       }
       setVerificationInput(match.partNumber);
       setSelectedPart(match);
       setPhysicalLocation(match.systemLocation === '-' ? '' : match.systemLocation);
+      setScannedPartDescription('');
     } catch (error) {
       Alert.alert('Lookup Failed', friendlyError(error));
     } finally {
@@ -390,6 +478,10 @@ Server: ${apiBaseUrl}`, [
   const addVerificationToList = () => {
     if (!selectedPart) {
       Alert.alert('Search Part', 'Search the part number first.');
+      return;
+    }
+    if (selectedPart.isNewPart && !String(selectedPart.partName || '').trim()) {
+      Alert.alert('Part Description', 'Enter or confirm the part name / description.');
       return;
     }
     if (physicalQty === '' || numberValue(physicalQty) < 0) {
@@ -415,19 +507,24 @@ Server: ${apiBaseUrl}`, [
     setPhysicalQty('');
     setPhysicalLocation('');
     setVerificationRemark('');
+    setScannedPartDescription('');
   };
 
   const submitVerificationList = async () => {
     if (!verificationList.length) return;
     setVerificationBusy(true);
     try {
+      const verificationSessionId = await getDailyVerificationSessionId(session);
       for (const row of verificationList) {
         await enqueueAndTrySync({
-          partNumber: row.partNumber,
+          partNumber: cleanPartNumber(row.partNumber),
+          partName: row.partName || '',
           physicalQty: row.physicalQty,
           location: row.physicalLocation,
           remark: row.remark,
           entryMethod: 'MANUAL_OR_CAMERA',
+          verificationSessionId,
+          isNewPart: Boolean(row.isNewPart),
         });
       }
       Alert.alert('Saved', `${verificationList.length} verification record(s) saved. Pending records will sync automatically.`);
@@ -591,6 +688,7 @@ Server: ${apiBaseUrl}`, [
           onLookup={() => lookupVerificationPart()}
           onScan={() => openScanner('verification')}
           selectedPart={selectedPart}
+          setSelectedPart={setSelectedPart}
           physicalQty={physicalQty}
           setPhysicalQty={setPhysicalQty}
           physicalLocation={physicalLocation}
@@ -652,9 +750,9 @@ Server: ${apiBaseUrl}`, [
 
 function PairScreen(props) {
   return (
-    <KeyboardAvoidingView style={styles.flex} behavior={Platform.OS === 'ios' ? 'padding' : undefined}>
-      <ScrollView contentContainerStyle={styles.pairPage} keyboardShouldPersistTaps="handled">
-        <View style={styles.logo}><Text style={styles.logoText}>SS</Text></View>
+    <KeyboardAvoidingView style={styles.flex} behavior={Platform.OS === 'ios' ? 'padding' : 'height'} keyboardVerticalOffset={Platform.OS === 'ios' ? 0 : 18}>
+      <ScrollView contentContainerStyle={styles.pairPage} keyboardShouldPersistTaps="handled" keyboardDismissMode="interactive">
+        <Image source={require("./assets/sleeping-stock-logo-transparent.png")} style={styles.brandLogo} resizeMode="contain" />
         <Text style={styles.appTitle}>Sleeping Stock Mobile</Text>
         <Text style={styles.appSub}>PAIR THIS DEVICE</Text>
         <View style={styles.card}>
@@ -696,9 +794,13 @@ function VerificationScreen(props) {
   }), { matched: 0, shortage: 0, excess: 0 });
   const diff = props.selectedPart ? differenceFor(props.selectedPart.systemQty, props.physicalQty, props.selectedPart.unitValue) : null;
   return (
-    <View style={styles.flex}>
+    <KeyboardAvoidingView
+      style={styles.flex}
+      behavior={Platform.OS === 'ios' ? 'padding' : 'height'}
+      keyboardVerticalOffset={Platform.OS === 'ios' ? 0 : 18}
+    >
       <Header title="Stock Verification" onBack={props.onBack} />
-      <ScrollView style={styles.flex} contentContainerStyle={styles.topContent} keyboardShouldPersistTaps="handled">
+      <ScrollView style={styles.flex} contentContainerStyle={[styles.topContent, { paddingBottom: 220 }]} keyboardShouldPersistTaps="handled" keyboardDismissMode="interactive">
         <Text style={styles.sectionLabel}>ADDED PARTS ({props.list.length})</Text>
         {props.list.length === 0 ? <Empty text="Added parts will appear here." /> : props.list.map((row) => <VerificationRow key={row.id} row={row} onDelete={() => props.removeRow(row.id)} />)}
         <View style={styles.summaryRow}>
@@ -710,7 +812,17 @@ function VerificationScreen(props) {
         {props.selectedPart && (
           <View style={styles.detailCard}>
             <Text style={styles.partBig}>{props.selectedPart.partNumber}</Text>
-            <Text style={styles.partName}>{props.selectedPart.partName}</Text>
+            {props.selectedPart.isNewPart ? (
+              <TextInput
+                style={[styles.bottomInput, { marginTop: 10 }]}
+                value={props.selectedPart.partName}
+                onChangeText={(value) => props.setSelectedPart((current) => ({ ...current, partName: value }))}
+                placeholder="Part Name / Description"
+                placeholderTextColor="#8793a6"
+              />
+            ) : (
+              <Text style={styles.partName}>{props.selectedPart.partName}</Text>
+            )}
             <InfoGrid rows={[
               ['System Qty', props.selectedPart.systemQty], ['System LOC', props.selectedPart.systemLocation],
               ['Available Qty', props.selectedPart.availableQty], ['Unit Value', `₹${props.selectedPart.unitValue.toLocaleString('en-IN')}`],
@@ -720,8 +832,7 @@ function VerificationScreen(props) {
           </View>
         )}
       </ScrollView>
-      <KeyboardAvoidingView behavior={Platform.OS === 'ios' ? 'padding' : undefined}>
-        <View style={styles.bottomPanel}>
+      <View style={styles.bottomPanel}>
           <View style={styles.inlineInputRow}>
             <TextInput style={styles.bottomInput} value={props.input} onChangeText={(v) => props.setInput(cleanPartNumber(v))} placeholder="Enter Part Number" placeholderTextColor="#8793a6" autoCapitalize="characters" />
             <SquareButton title="⌕" onPress={props.onLookup} />
@@ -739,8 +850,7 @@ function VerificationScreen(props) {
             <PrimaryButton title={`Submit All (${props.list.length})`} onPress={props.onSubmit} disabled={!props.list.length} busy={props.busy} compact />
           </View>
         </View>
-      </KeyboardAvoidingView>
-    </View>
+    </KeyboardAvoidingView>
   );
 }
 
@@ -753,7 +863,7 @@ function SearchScreen(props) {
         {props.results.length === 0 ? <Empty text="Search results will appear here." /> : props.results.map((row) => <StockRow key={row.partNumber} row={row} />)}
         {props.parts.length > 0 && <View style={styles.chipWrap}>{props.parts.map((part) => <TouchableOpacity key={part} style={styles.chip} onPress={() => props.removePart(part)}><Text style={styles.chipText}>{part} ×</Text></TouchableOpacity>)}</View>}
       </ScrollView>
-      <KeyboardAvoidingView behavior={Platform.OS === 'ios' ? 'padding' : undefined}>
+      <KeyboardAvoidingView behavior={Platform.OS === 'ios' ? 'padding' : 'height'} keyboardVerticalOffset={Platform.OS === 'ios' ? 0 : 18}>
         <View style={styles.bottomPanel}>
           <View style={styles.inlineInputRow}>
             <TextInput style={[styles.bottomInput, { minHeight: 48 }]} value={props.input} onChangeText={props.setInput} placeholder="Enter / Paste Part Numbers" placeholderTextColor="#8793a6" autoCapitalize="characters" multiline />
@@ -876,7 +986,7 @@ function StockRow({ row }) { return <View style={styles.stockRow}><View style={{
 const styles = StyleSheet.create({
   flex: { flex: 1 }, safeArea: { flex: 1, backgroundColor: BG }, center: { alignItems: 'center', justifyContent: 'center' },
   offline: { backgroundColor: '#fff2c7', paddingVertical: 7, alignItems: 'center' }, offlineText: { color: '#7b5b00', fontSize: 12, fontWeight: '700' },
-  pairPage: { flexGrow: 1, justifyContent: 'center', padding: 24 }, qrInfo: { color: MUTED, fontSize: 12, lineHeight: 18, marginBottom: 16 }, detectedUser: { marginTop: 12, color: SUCCESS, fontSize: 12, fontWeight: '800', textAlign: 'center' }, logo: { alignSelf: 'center', width: 72, height: 72, borderRadius: 22, backgroundColor: BLUE, alignItems: 'center', justifyContent: 'center' }, logoText: { color: '#fff', fontSize: 26, fontWeight: '900' }, appTitle: { marginTop: 16, textAlign: 'center', color: DARK, fontSize: 24, fontWeight: '900' }, appSub: { marginTop: 4, marginBottom: 22, textAlign: 'center', color: MUTED, fontSize: 11, fontWeight: '800', letterSpacing: 1.4 },
+  pairPage: { flexGrow: 1, justifyContent: 'center', padding: 24, paddingBottom: 56 }, qrInfo: { color: MUTED, fontSize: 12, lineHeight: 18, marginBottom: 16 }, detectedUser: { marginTop: 12, color: SUCCESS, fontSize: 12, fontWeight: '800', textAlign: 'center' }, brandLogo: { alignSelf: 'center', width: 190, height: 190 }, appTitle: { marginTop: 16, textAlign: 'center', color: DARK, fontSize: 24, fontWeight: '900' }, appSub: { marginTop: 4, marginBottom: 22, textAlign: 'center', color: MUTED, fontSize: 11, fontWeight: '800', letterSpacing: 1.4 },
   card: { backgroundColor: '#fff', padding: 18, borderRadius: 20, borderWidth: 1, borderColor: BORDER }, label: { marginBottom: 7, color: DARK, fontSize: 12, fontWeight: '800' }, input: { minHeight: 50, borderWidth: 1, borderColor: BORDER, borderRadius: 13, paddingHorizontal: 14, backgroundColor: '#fbfcff', color: DARK },
   primaryButton: { minHeight: 50, paddingHorizontal: 18, borderRadius: 13, backgroundColor: BLUE, alignItems: 'center', justifyContent: 'center' }, primaryText: { color: '#fff', fontWeight: '900' }, secondaryButton: { flex: 1, minHeight: 50, borderRadius: 13, borderWidth: 1, borderColor: BLUE, alignItems: 'center', justifyContent: 'center', marginRight: 10 }, secondaryText: { color: BLUE, fontWeight: '900' }, disabled: { opacity: 0.45 },
   homePage: { padding: 20, paddingBottom: 50 }, homeHeader: { flexDirection: 'row', justifyContent: 'space-between', alignItems: 'center' }, hello: { color: MUTED, fontSize: 11, fontWeight: '800' }, homeName: { marginTop: 3, color: DARK, fontSize: 24, fontWeight: '900' }, logout: { color: DANGER, fontWeight: '800' }, branchCard: { marginTop: 20, marginBottom: 22, padding: 18, backgroundColor: BLUE, borderRadius: 20 }, branchTitle: { color: '#fff', fontSize: 18, fontWeight: '900' }, branchSub: { marginTop: 5, color: '#dbe7ff', fontSize: 12 }, menuButton: { minHeight: 82, marginBottom: 13, padding: 15, backgroundColor: '#fff', borderWidth: 1, borderColor: BORDER, borderRadius: 18, flexDirection: 'row', alignItems: 'center' }, menuIcon: { width: 48, height: 48, borderRadius: 15, backgroundColor: '#edf3ff', alignItems: 'center', justifyContent: 'center', marginRight: 13 }, menuTitle: { color: DARK, fontSize: 16, fontWeight: '900' }, menuSub: { marginTop: 4, color: MUTED, fontSize: 11 }, chevron: { color: BLUE, fontSize: 28 }, pendingCard: { marginTop: 10, padding: 14, backgroundColor: '#fff7e6', borderRadius: 14, flexDirection: 'row', justifyContent: 'space-between' }, pendingText: { color: '#865b00', flex: 1 }, pendingAction: { color: BLUE, fontWeight: '900' },
