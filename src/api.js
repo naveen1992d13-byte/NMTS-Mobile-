@@ -88,8 +88,28 @@ export const submitPartResponse = (requestGroupKey, parts) => request('post', '/
     })),
   },
 });
-export const submitStockVerification = ({ partNumber, physicalQty, location, remark, entryMethod, clientId }) => request('post', '/mobile/stock-verification', {
-  data: { part_number: partNumber, physical_qty: physicalQty, location, remark, entry_method: entryMethod, client_id: clientId },
+export const submitStockVerification = ({
+  partNumber,
+  partName,
+  physicalQty,
+  location,
+  remark,
+  entryMethod,
+  clientId,
+  verificationSessionId,
+  isNewPart,
+}) => request('post', '/mobile/stock-verification', {
+  data: {
+    part_number: partNumber,
+    part_name: partName || '',
+    physical_qty: physicalQty,
+    location,
+    remark,
+    entry_method: entryMethod,
+    client_id: clientId,
+    verification_session_id: verificationSessionId,
+    is_new_part: Boolean(isNewPart),
+  },
 });
 export const getStockVerificationHistory = (options = {}) => request('get', '/mobile/stock-verification/history', {
   params: typeof options === 'string' ? { part_number: options } : { ...(options.partNumber ? { part_number: options.partNumber } : {}), ...(options.limit ? { limit: options.limit } : {}) },
