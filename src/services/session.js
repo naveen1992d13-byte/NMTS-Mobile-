@@ -36,3 +36,24 @@ export async function clearSession() {
     return false;
   }
 }
+
+
+function localDateKey(date = new Date()) {
+  const year = date.getFullYear();
+  const month = String(date.getMonth() + 1).padStart(2, '0');
+  const day = String(date.getDate()).padStart(2, '0');
+  return `${year}${month}${day}`;
+}
+
+/**
+ * One verification session per physical mobile/device per local calendar day.
+ * Every upload batch on the same device and day receives this same ID.
+ */
+export async function getDailyVerificationSessionId(sessionOverride = null) {
+  const session = sessionOverride || await getSession();
+  const devicePart = String(session?.deviceId || session?.mobileUserId || 'DEVICE')
+    .toUpperCase()
+    .replace(/[^A-Z0-9]/g, '')
+    .slice(-12) || 'DEVICE';
+  return `SV${localDateKey()}${devicePart}`;
+}

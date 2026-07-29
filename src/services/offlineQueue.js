@@ -47,6 +47,9 @@ export async function initOfflineQueue() {
       location TEXT,
       remark TEXT,
       entry_method TEXT NOT NULL,
+      verification_session_id TEXT,
+      part_name TEXT,
+      is_new_part INTEGER NOT NULL DEFAULT 0,
       created_at TEXT NOT NULL,
       sync_status TEXT NOT NULL DEFAULT 'pending',
       retry_count INTEGER NOT NULL DEFAULT 0,
@@ -54,6 +57,19 @@ export async function initOfflineQueue() {
       last_attempt_at TEXT
     );
   `);
+
+  // Safe migrations for users upgrading from version 1.1.x.
+  for (const statement of [
+    `ALTER TABLE verification_queue ADD COLUMN verification_session_id TEXT`,
+    `ALTER TABLE verification_queue ADD COLUMN part_name TEXT`,
+    `ALTER TABLE verification_queue ADD COLUMN is_new_part INTEGER NOT NULL DEFAULT 0`,
+  ]) {
+    try {
+      await db.execAsync(statement);
+    } catch (error) {
+      // Column already exists.
+    }
+  }
 }
 
 function notifyListeners() {
@@ -77,15 +93,26 @@ export function subscribeToQueueChanges(callback) {
  * Call this instead of calling the API directly from the Verification
  * screen — enqueueAndTrySync() handles both offline and online cases.
  */
-export async function enqueueVerification({ partNumber, physicalQty, location, remark, entryMethod }) {
+export async function enqueueVerification({ partNumber, partName, physicalQty, location, remark, entryMethod, verificationSessionId, isNewPart }) {
   const db = await getDb();
   const clientId = Crypto.randomUUID();
   const createdAt = new Date().toISOString();
   await db.runAsync(
     `INSERT INTO verification_queue
-      (client_id, part_number, physical_qty, location, remark, entry_method, created_at, sync_status, retry_count)
-     VALUES (?, ?, ?, ?, ?, ?, ?, 'pending', 0)`,
-    [clientId, partNumber, physicalQty, location || '', remark || '', entryMethod, createdAt]
+      (client_id, part_number, part_name, physical_qty, location, remark, entry_method, verification_session_id, is_new_part, created_at, sync_status, retry_count)
+     VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, 'pending', 0)`,
+    [
+      clientId,
+      partNumber,
+      partName || '',
+      physicalQty,
+      location || '',
+      remark || '',
+      entryMethod,
+      verificationSessionId || '',
+      isNewPart ? 1 : 0,
+      createdAt,
+    ]
   );
   notifyListeners();
   return clientId;
@@ -151,11 +178,14 @@ export async function syncQueue() {
       try {
         await submitStockVerification({
           partNumber: row.part_number,
+          partName: row.part_name || '',
           physicalQty: row.physical_qty,
           location: row.location,
           remark: row.remark,
           entryMethod: row.entry_method,
           clientId: row.client_id,
+          verificationSessionId: row.verification_session_id || '',
+          isNewPart: Boolean(row.is_new_part),
         });
         // Confirmed saved server-side (or already had been, per client_id
         // idempotency) — safe to remove from the local queue now.
