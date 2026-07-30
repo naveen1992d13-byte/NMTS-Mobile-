@@ -29,7 +29,7 @@ function errorFromAxios(error) {
   if (error instanceof ApiError) return error;
   const status = error?.response?.status || 0;
   const detail = error?.response?.data?.detail;
-  const message = typeof detail === 'string' ? detail : error?.message || 'Unable to connect to the NMTS server.';
+  const message = typeof detail === 'string' ? detail : detail?.message || error?.message || 'Unable to connect to the NMTS server.';
   const kind = status === 401 || status === 403 ? 'auth' : status ? 'server' : 'network';
   return new ApiError(message, { status, kind, data: error?.response?.data || null });
 }
@@ -55,12 +55,13 @@ async function request(method, path, { data, params, auth = true, baseUrl } = {}
   }
 }
 
-export const verifyPairing = ({ mobileUserId, pairingCode, pairingToken, deviceUserName, deviceUserMobile, deviceName, deviceInfo, appVersion, pushToken, apiBaseUrl }) =>
+export const verifyPairing = ({ mobileUserId, pairingType, pairingCode, pairingToken, deviceUserName, deviceUserMobile, deviceName, deviceInfo, appVersion, pushToken, apiBaseUrl }) =>
   request('post', '/mobile/pairing/verify', {
     auth: false,
     baseUrl: apiBaseUrl,
     data: {
-      mobile_user_id: mobileUserId,
+      mobile_user_id: mobileUserId || null,
+      pairing_type: pairingType || null,
       pairing_code: pairingCode,
       pairing_token: pairingToken || null,
       device_user_name: deviceUserName,
