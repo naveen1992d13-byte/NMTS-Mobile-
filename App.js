@@ -309,19 +309,19 @@ export default function App() {
     return () => animation.stop();
   }, [screen, scanLine]);
 
-  const pairDevice = async ({ qrMobileUserId, qrPairingCode, apiBaseUrl, pairingToken }) => {
+  const pairDevice = async ({ qrMobileUserId, pairingType, qrPairingCode, apiBaseUrl, pairingToken }) => {
     if (!userName.trim() || !mobileNumber.trim()) {
       Alert.alert('Required', 'Enter your name and mobile number before scanning the QR code.');
       return;
     }
-    if (!qrMobileUserId?.trim() || !qrPairingCode?.trim() || !apiBaseUrl || !pairingToken) {
+    if (!qrPairingCode?.trim() || !apiBaseUrl || !pairingToken || (pairingType === 'REPAIR' && !qrMobileUserId?.trim())) {
       Alert.alert('Scan QR Code', 'Scan the pairing QR code generated from the NMTS website.');
       return;
     }
     setPairingBusy(true);
     try {
       const pushToken = await registerForPushNotificationsAsync().catch(() => null);
-      const result = await verifyPairing({ mobileUserId: qrMobileUserId.trim().toUpperCase(), pairingCode: qrPairingCode.trim().toUpperCase(), pairingToken, apiBaseUrl, deviceUserName: userName.trim(), deviceUserMobile: mobileNumber.trim(), deviceName: Device.deviceName || `${Platform.OS} device`, deviceInfo: `${Device.modelName || 'Unknown'} • ${Device.osName || Platform.OS} ${Device.osVersion || ''}`, appVersion: Constants.expoConfig?.version || '1.0.0', pushToken });
+      const result = await verifyPairing({ mobileUserId: qrMobileUserId?.trim()?.toUpperCase() || null, pairingType, pairingCode: qrPairingCode.trim().toUpperCase(), pairingToken, apiBaseUrl, deviceUserName: userName.trim(), deviceUserMobile: mobileNumber.trim(), deviceName: Device.deviceName || `${Platform.OS} device`, deviceInfo: `${Device.modelName || 'Unknown'} • ${Device.osName || Platform.OS} ${Device.osVersion || ''}`, appVersion: Constants.expoConfig?.version || '1.0.0', pushToken });
       const nextSession = { apiBaseUrl, sessionToken: result.session_token, deviceId: result.device_id, mobileUserId: result.mobile_user_id, name: result.device_user_name || result.name || userName.trim(), deviceUserMobile: result.device_user_mobile || mobileNumber.trim(), brandName: result.brand_name, dealerName: result.dealer_name, branch: result.branch };
       await saveSession(nextSession);
       setSession(nextSession);
@@ -339,14 +339,18 @@ export default function App() {
     try {
       const parsed = JSON.parse(String(data || ''));
       const apiBaseUrl = parsed?.api_base_url || parsed?.apiBaseUrl;
-      const valid = parsed?.issuer === 'NMTS_SLEEPING_STOCK_PAIRING' && Number(parsed?.version) === 2 && parsed?.mobile_user_id && parsed?.pairing_code && parsed?.pairing_token && apiBaseUrl;
+      const pairingType = String(parsed?.pairing_type || (parsed?.mobile_user_id ? 'REPAIR' : 'NEW')).toUpperCase();
+      const valid = parsed?.issuer === 'NMTS_SLEEPING_STOCK_PAIRING' && [2, 3].includes(Number(parsed?.version)) && ['NEW', 'REPAIR'].includes(pairingType) && parsed?.pairing_code && parsed?.pairing_token && apiBaseUrl && (pairingType !== 'REPAIR' || parsed?.mobile_user_id);
       if (!valid) throw new Error('invalid-nmts-qr');
-      setMobileUserId(String(parsed.mobile_user_id).trim().toUpperCase());
+      const detectedId = parsed?.mobile_user_id ? String(parsed.mobile_user_id).trim().toUpperCase() : '';
+      setMobileUserId(detectedId);
       setPairingCode(String(parsed.pairing_code).trim().toUpperCase());
-      Alert.alert('NMTS QR Detected', `Mobile User: ${String(parsed.mobile_user_id).trim().toUpperCase()}
+      Alert.alert('NMTS QR Detected', pairingType === 'REPAIR' ? `Re-pair Mobile User: ${detectedId}
+Server: ${apiBaseUrl}` : `New Mobile User Pairing
+Your Mobile User ID will be created after verification.
 Server: ${apiBaseUrl}`, [
         { text: 'Scan Again', style: 'cancel', onPress: () => setPairingScanned(false) },
-        { text: 'Pair Device', onPress: () => pairDevice({ qrMobileUserId: String(parsed.mobile_user_id), qrPairingCode: String(parsed.pairing_code), apiBaseUrl: String(apiBaseUrl), pairingToken: String(parsed.pairing_token) }) },
+        { text: pairingType === 'REPAIR' ? 'Re-pair Device' : 'Pair Device', onPress: () => pairDevice({ qrMobileUserId: detectedId, pairingType, qrPairingCode: String(parsed.pairing_code), apiBaseUrl: String(apiBaseUrl), pairingToken: String(parsed.pairing_token) }) },
       ]);
     } catch (_error) {
       Alert.alert('Invalid QR Code', 'Scan only the pairing QR code generated from the NMTS website.');
@@ -758,7 +762,7 @@ function PairScreen(props) {
         <View style={styles.card}>
           <Field label="Your Name" value={props.userName} onChangeText={props.setUserName} />
           <Field label="Mobile Number" value={props.mobileNumber} onChangeText={props.setMobileNumber} keyboardType="phone-pad" />
-          <Text style={styles.qrInfo}>The NMTS website QR contains the Mobile User ID, pairing code, pairing token and secure server URL.</Text>
+          <Text style={styles.qrInfo}>The NMTS website QR contains a one-time pairing code and secure server URL. A new Mobile User ID is created after first pairing; Re-pair keeps the same ID.</Text>
           <PrimaryButton title="Scan NMTS Pairing QR" onPress={props.onScanQr} busy={props.busy} />
           {!!props.mobileUserId && <Text style={styles.detectedUser}>Detected User: {props.mobileUserId}</Text>}
         </View>
