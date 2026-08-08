@@ -99,6 +99,8 @@ export const submitStockVerification = ({
   clientId,
   verificationSessionId,
   isNewPart,
+  verificationType = 'physical',
+  damageQty = 0,
 }) => request('post', '/mobile/stock-verification', {
   data: {
     part_number: partNumber,
@@ -110,8 +112,13 @@ export const submitStockVerification = ({
     client_id: clientId,
     verification_session_id: verificationSessionId,
     is_new_part: Boolean(isNewPart),
+    verification_type: verificationType,
+    damage_qty: damageQty,
   },
 });
+
+export const getAutoPerpetualTasks = () => request('get', '/mobile/auto-perpetual/tasks');
+export const getAutoPerpetualSessionToday = () => request('get', '/mobile/auto-perpetual/session/today');
 export const getStockVerificationHistory = (options = {}) => request('get', '/mobile/stock-verification/history', {
   params: typeof options === 'string' ? { part_number: options } : { ...(options.partNumber ? { part_number: options.partNumber } : {}), ...(options.limit ? { limit: options.limit } : {}) },
 });
