@@ -25,7 +25,7 @@ import * as Device from 'expo-device';
 import Constants from 'expo-constants';
 import NetInfo from '@react-native-community/netinfo';
 
-import { getSession, saveSession, clearSession, getDailyVerificationSessionId } from './src/services/session';
+import { getSession, saveSession, clearSession } from './src/services/session';
 import {
   ApiError,
   setOnSessionInvalidated,
@@ -37,6 +37,8 @@ import {
   submitPartResponse,
   searchStock,
   getLatestAppVersion,
+  getAutoPerpetualTasks,
+  getAutoPerpetualSessionToday,
 } from './src/api';
 import {
   initOfflineQueue,
@@ -173,6 +175,13 @@ export default function App() {
   const [verificationList, setVerificationList] = useState([]);
   const [verificationBusy, setVerificationBusy] = useState(false);
 
+  const [autoTasks, setAutoTasks] = useState([]);
+  const [autoSessionId, setAutoSessionId] = useState('');
+  const [autoBusy, setAutoBusy] = useState(false);
+  const [autoSelected, setAutoSelected] = useState(null);
+  const [autoDamageQty, setAutoDamageQty] = useState('');
+  const [damageQty, setDamageQty] = useState('');
+
   const [searchInput, setSearchInput] = useState('');
   const [searchParts, setSearchParts] = useState([]);
   const [searchResults, setSearchResults] = useState([]);
@@ -249,8 +258,17 @@ export default function App() {
     if (!session) return undefined;
     let teardown = () => {};
     initPushNotifications({
-      onNotificationReceived: () => screen === 'notifications' && loadNotifications(),
-      onNotificationTapped: () => setScreen('notifications'),
+      onNotificationReceived: (data) => {
+        if (data?.type === 'auto_perpetual') loadAutoTasks();
+        if (screen === 'notifications') loadNotifications();
+      },
+      onNotificationTapped: (data) => {
+        if (data?.type === 'auto_perpetual') {
+          loadAutoTasks().finally(() => setScreen('auto'));
+          return;
+        }
+        setScreen('notifications');
+      },
     })
       .then((fn) => {
         teardown = fn || teardown;
@@ -282,7 +300,7 @@ export default function App() {
         return true;
       }
 
-      if (screen === 'verification' || screen === 'search' || screen === 'notifications') {
+      if (screen === 'verification' || screen === 'search' || screen === 'notifications' || screen === 'auto') {
         setScreen('home');
         return true;
       }
@@ -503,6 +521,7 @@ Server: ${apiBaseUrl}`, [
       physicalQty: numberValue(physicalQty),
       physicalLocation: physicalLocation.trim().toUpperCase(),
       remark: verificationRemark.trim(),
+      damageQty: numberValue(damageQty),
       ...difference,
     };
     setVerificationList((current) => [...current.filter((x) => x.partNumber !== row.partNumber), row]);
@@ -514,11 +533,76 @@ Server: ${apiBaseUrl}`, [
     setScannedPartDescription('');
   };
 
+  const loadAutoTasks = useCallback(async () => {
+    setAutoBusy(true);
+    try {
+      const data = await getAutoPerpetualTasks();
+      setAutoTasks(data?.tasks || []);
+      setAutoSessionId(data?.session_id || '');
+    } catch (error) {
+      Alert.alert('Auto Perpetual', friendlyError(error));
+      setAutoTasks([]);
+    } finally {
+      setAutoBusy(false);
+    }
+  }, []);
+
+  useEffect(() => {
+    if (screen === 'auto') loadAutoTasks();
+  }, [screen, loadAutoTasks]);
+
+  const selectAutoTask = (task) => {
+    setAutoSelected(task);
+    setVerificationInput(cleanPartNumber(task.part_number));
+    setSelectedPart({
+      partNumber: cleanPartNumber(task.part_number),
+      partName: task.part_name || '-',
+      systemQty: numberValue(task.system_qty),
+      availableQty: numberValue(task.system_qty),
+      systemLocation: task.loc || '-',
+      unitValue: 0,
+    });
+    setPhysicalLocation(task.loc && task.loc !== '-' ? task.loc : '');
+    setPhysicalQty('');
+    setAutoDamageQty('');
+    setVerificationRemark('');
+  };
+
+  const submitAutoVerification = async () => {
+    if (!autoSelected) return Alert.alert('Select Part', 'Choose an assigned part from today\'s list.');
+    if (physicalQty === '' || numberValue(physicalQty) < 0) return Alert.alert('Physical Quantity', 'Enter a valid physical quantity.');
+    setAutoBusy(true);
+    try {
+      const sessionResp = await getAutoPerpetualSessionToday().catch(() => ({ session_id: autoSessionId }));
+      await enqueueAndTrySync({
+        partNumber: cleanPartNumber(autoSelected.part_number),
+        partName: autoSelected.part_name || '',
+        physicalQty: numberValue(physicalQty),
+        location: (physicalLocation || autoSelected.loc || '').trim().toUpperCase(),
+        remark: verificationRemark.trim(),
+        entryMethod: 'MANUAL_OR_CAMERA',
+        verificationSessionId: sessionResp?.session_id || autoSessionId || '',
+        isNewPart: false,
+        verificationType: 'auto',
+        damageQty: numberValue(autoDamageQty),
+      });
+      Alert.alert('Saved', 'Auto Perpetual verification queued for sync.');
+      setAutoSelected(null);
+      setPhysicalQty('');
+      setAutoDamageQty('');
+      setVerificationRemark('');
+      await loadAutoTasks();
+    } catch (error) {
+      Alert.alert('Submit Failed', friendlyError(error));
+    } finally {
+      setAutoBusy(false);
+    }
+  };
+
   const submitVerificationList = async () => {
     if (!verificationList.length) return;
     setVerificationBusy(true);
     try {
-      const verificationSessionId = await getDailyVerificationSessionId(session);
       for (const row of verificationList) {
         await enqueueAndTrySync({
           partNumber: cleanPartNumber(row.partNumber),
@@ -527,8 +611,10 @@ Server: ${apiBaseUrl}`, [
           location: row.physicalLocation,
           remark: row.remark,
           entryMethod: 'MANUAL_OR_CAMERA',
-          verificationSessionId,
+          verificationSessionId: '',
           isNewPart: Boolean(row.isNewPart),
+          verificationType: 'physical',
+          damageQty: numberValue(row.damageQty || 0),
         });
       }
       Alert.alert('Saved', `${verificationList.length} verification record(s) saved. Pending records will sync automatically.`);
@@ -684,6 +770,26 @@ Server: ${apiBaseUrl}`, [
         />
       )}
       {screen === 'home' && <HomeScreen session={session} pendingCount={pendingCount} navigate={setScreen} logout={logout} />}
+      {screen === 'auto' && (
+        <AutoPerpetualScreen
+          onBack={goBack}
+          sessionId={autoSessionId}
+          tasks={autoTasks}
+          busy={autoBusy}
+          selected={autoSelected}
+          onSelect={selectAutoTask}
+          physicalQty={physicalQty}
+          setPhysicalQty={setPhysicalQty}
+          physicalLocation={physicalLocation}
+          setPhysicalLocation={setPhysicalLocation}
+          remark={verificationRemark}
+          setRemark={setVerificationRemark}
+          damageQty={autoDamageQty}
+          setDamageQty={setAutoDamageQty}
+          onRefresh={loadAutoTasks}
+          onSubmit={submitAutoVerification}
+        />
+      )}
       {screen === 'verification' && (
         <VerificationScreen
           onBack={goBack}
@@ -699,6 +805,8 @@ Server: ${apiBaseUrl}`, [
           setPhysicalLocation={setPhysicalLocation}
           remark={verificationRemark}
           setRemark={setVerificationRemark}
+          damageQty={damageQty}
+          setDamageQty={setDamageQty}
           list={verificationList}
           removeRow={(id) => setVerificationList((rows) => rows.filter((x) => x.id !== id))}
           onAdd={addVerificationToList}
@@ -783,10 +891,45 @@ function HomeScreen({ session, pendingCount, navigate, logout }) {
         <Text style={styles.branchSub}>{session?.dealerName || ''} {session?.brandName ? `• ${session.brandName}` : ''}</Text>
       </View>
       <MenuButton icon="🔔" title="Notifications" subtitle="Pick and process parts requests" onPress={() => navigate('notifications')} />
-      <MenuButton icon="✓" title="Stock Verification" subtitle="Scan, count and upload multiple parts" onPress={() => navigate('verification')} />
+      <MenuButton icon="✓" title="Physical Perpetual" subtitle="Manual / scan stock verification (MOPS)" onPress={() => navigate('verification')} />
+      <MenuButton icon="⚡" title="Auto Perpetual" subtitle="Today&apos;s assigned verification tasks (AOPS)" onPress={() => navigate('auto')} />
       <MenuButton icon="⌕" title="Stock Availability" subtitle="Search single or multiple part numbers" onPress={() => navigate('search')} />
       {pendingCount > 0 && <View style={styles.pendingCard}><Text style={styles.pendingText}>{pendingCount} verification record(s) pending upload</Text><TouchableOpacity onPress={() => syncQueue()}><Text style={styles.pendingAction}>Upload Now</Text></TouchableOpacity></View>}
     </ScrollView>
+  );
+}
+
+function AutoPerpetualScreen({ onBack, sessionId, tasks, busy, selected, onSelect, physicalQty, setPhysicalQty, physicalLocation, setPhysicalLocation, remark, setRemark, damageQty, setDamageQty, onRefresh, onSubmit }) {
+  const diff = selected ? differenceFor(selected.systemQty, physicalQty, selected.unitValue) : null;
+  return (
+    <KeyboardAvoidingView style={styles.flex} behavior={Platform.OS === 'ios' ? 'padding' : 'height'} keyboardVerticalOffset={Platform.OS === 'ios' ? 0 : 18}>
+      <Header title="Auto Perpetual" onBack={onBack} action="Refresh" onAction={onRefresh} />
+      <ScrollView style={styles.flex} contentContainerStyle={[styles.topContent, { paddingBottom: 220 }]} keyboardShouldPersistTaps="handled">
+        <Text style={styles.sectionLabel}>TODAY&apos;S SESSION</Text>
+        <View style={styles.detailCard}><Text style={styles.partBig}>{sessionId || 'Loading session…'}</Text><Text style={styles.partName}>Pending tasks: {tasks.length}</Text></View>
+        <Text style={styles.sectionLabel}>ASSIGNED PARTS ({tasks.length})</Text>
+        {tasks.length === 0 ? <Empty text="No Auto Perpetual tasks for today." /> : tasks.map((t) => (
+          <TouchableOpacity key={`${t.part_number}-${t.id || ''}`} style={[styles.verificationRow, selected?.part_number === t.part_number && { borderColor: BLUE, borderWidth: 2 }]} onPress={() => onSelect(t)}>
+            <View style={{ flex: 1 }}><Text style={styles.rowPartNo}>{t.part_number}</Text><Text style={styles.rowPartName}>{t.part_name || '-'}</Text><Text style={styles.rowMeta}>LOC: {t.loc || '-'} · Sys: {t.system_qty ?? '-'}{t.coverage_kind === 'recheck' ? ' · RECHECK' : ''}</Text></View>
+          </TouchableOpacity>
+        ))}
+        {selected && (
+          <View style={styles.detailCard}>
+            <Text style={styles.partBig}>{selected.partNumber}</Text>
+            <Text style={styles.partName}>{selected.partName}</Text>
+            <InfoGrid rows={[['System Qty', selected.systemQty], ['LOC', selected.systemLocation], ['Shortage', diff?.shortageQty ?? 0], ['Excess', diff?.excessQty ?? 0]]} />
+            <View style={styles.twoInputs}>
+              <TextInput style={[styles.bottomInput, styles.halfInput]} value={physicalQty} onChangeText={(v) => setPhysicalQty(v.replace(/[^0-9.]/g, ''))} placeholder="Physical Qty" keyboardType="decimal-pad" placeholderTextColor="#8793a6" />
+              <TextInput style={[styles.bottomInput, styles.halfInput]} value={damageQty} onChangeText={(v) => setDamageQty(v.replace(/[^0-9.]/g, ''))} placeholder="Damage Qty" keyboardType="decimal-pad" placeholderTextColor="#8793a6" />
+            </View>
+            <TextInput style={styles.bottomInput} value={physicalLocation} onChangeText={setPhysicalLocation} placeholder="Physical LOC" autoCapitalize="characters" placeholderTextColor="#8793a6" />
+            <TextInput style={styles.bottomInput} value={remark} onChangeText={setRemark} placeholder="Remark (optional)" placeholderTextColor="#8793a6" />
+            {diff && <StatusPill value={diff.status} />}
+            <PrimaryButton title="Submit Verification" onPress={onSubmit} busy={busy} />
+          </View>
+        )}
+      </ScrollView>
+    </KeyboardAvoidingView>
   );
 }
 
@@ -848,6 +991,7 @@ function VerificationScreen(props) {
               <TextInput style={[styles.bottomInput, styles.halfInput]} value={props.physicalLocation} onChangeText={props.setPhysicalLocation} placeholder="Physical LOC" autoCapitalize="characters" placeholderTextColor="#8793a6" />
             </View>
             <TextInput style={styles.bottomInput} value={props.remark} onChangeText={props.setRemark} placeholder="Remark (optional)" placeholderTextColor="#8793a6" />
+            <TextInput style={styles.bottomInput} value={props.damageQty} onChangeText={(v) => props.setDamageQty(v.replace(/[^0-9.]/g, ''))} placeholder="Damage Qty (optional)" keyboardType="decimal-pad" placeholderTextColor="#8793a6" />
           </>}
           <View style={styles.actionRow}>
             <SecondaryButton title="Add to List" onPress={props.onAdd} disabled={!props.selectedPart} />
