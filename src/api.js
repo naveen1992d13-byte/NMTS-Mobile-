@@ -185,15 +185,17 @@ export const getStockVerificationHistory = (options = {}) => request('get', '/mo
 });
 
 /**
- * Stock Availability search against today's IST upload only.
- * - mode 'prefix' (single search): GET ?q=26300&mode=prefix  (part_numbers NOT required)
- * - mode 'exact' (Multiple Part Search): GET ?part_numbers=A\nB\nC
+ * Stock Availability search against current Product Hub data (paired Brand/Dealer/Branch).
+ * Contract must match backend /mobile/stock-search:
+ * - mode 'prefix' (Single Search): GET ?q=26300&mode=prefix  (part_numbers NOT required — avoids HTTP 422)
+ * - mode 'exact' (Multiple Part Search): GET ?part_numbers=A\nB\nC&mode=exact
  */
 export async function searchStock(query, options = {}) {
   const mode = options.mode || 'exact';
   if (mode === 'prefix') {
     const q = Array.isArray(query) ? String(query[0] || '') : String(query || '');
     const needle = q.trim();
+    // Single Search: only `q` + mode=prefix. Do not send part_numbers (Multiple Search param).
     return request('get', '/mobile/stock-search', {
       params: { q: needle, mode: 'prefix', limit: options.limit || 100 },
     });

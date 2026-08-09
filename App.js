@@ -773,7 +773,7 @@ export default function App() {
       const response = await searchStock(q, { mode: 'prefix' });
       const unavailable = response?.today_upload_available === false;
       const uploadMsg = unavailable
-        ? (response?.message || "Today's stock has not been uploaded for this branch.")
+        ? (response?.message || 'No stock uploaded today for this branch.')
         : '';
       setSearchUploadMessage(uploadMsg);
       const rows = unavailable ? [] : (response?.results || []).map(mapStockRow);
@@ -807,7 +807,7 @@ export default function App() {
       const response = await searchStock(parts, { mode: 'exact' });
       const unavailable = response?.today_upload_available === false;
       const uploadMsg = unavailable
-        ? (response?.message || "Today's stock has not been uploaded for this branch.")
+        ? (response?.message || 'No stock uploaded today for this branch.')
         : '';
       setMultiUploadMessage(uploadMsg);
       if (unavailable) {
