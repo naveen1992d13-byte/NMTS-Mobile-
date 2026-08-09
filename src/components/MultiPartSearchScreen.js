@@ -9,8 +9,8 @@ import {
   TextInput,
   View,
 } from 'react-native';
-import { BLUE, BORDER, DARK, MUTED, SUCCESS, DANGER } from '../theme';
-import { Empty, Header, PrimaryButton, StockResultCard } from './ui';
+import { BLUE, BORDER, DARK, MUTED, SUCCESS, DANGER, WARNING } from '../theme';
+import { AgingThresholdSelector, Empty, Header, PrimaryButton, StockResultCard } from './ui';
 
 export default function MultiPartSearchScreen({
   onBack,
@@ -21,6 +21,8 @@ export default function MultiPartSearchScreen({
   notFound,
   busy,
   agingThreshold,
+  setAgingThreshold,
+  uploadMessage,
 }) {
   return (
     <KeyboardAvoidingView
@@ -37,7 +39,7 @@ export default function MultiPartSearchScreen({
       >
         <Text style={styles.sectionLabel}>PASTE PART NUMBERS</Text>
         <Text style={styles.hint}>
-          Supports newlines, commas, or spaces. Paste from Excel, WhatsApp, or Notes.
+          Supports newlines, commas, or spaces. Paste from Excel, WhatsApp, or Notes. Exact full part numbers only.
         </Text>
         <TextInput
           style={styles.multiInput}
@@ -52,6 +54,16 @@ export default function MultiPartSearchScreen({
         />
         <PrimaryButton title="Search All" onPress={onSearch} busy={busy} />
 
+        <View style={{ marginTop: 16 }}>
+          <AgingThresholdSelector value={agingThreshold} onChange={setAgingThreshold} />
+        </View>
+
+        {uploadMessage ? (
+          <View style={styles.uploadBanner}>
+            <Text style={styles.uploadBannerText}>{uploadMessage}</Text>
+          </View>
+        ) : null}
+
         <View style={styles.summaryRow}>
           <View style={[styles.summaryCard, styles.foundCard]}>
             <Text style={styles.summaryValue}>{results.length}</Text>
@@ -65,7 +77,9 @@ export default function MultiPartSearchScreen({
 
         <Text style={styles.sectionLabel}>RESULTS ({results.length})</Text>
         {busy ? <ActivityIndicator color={BLUE} style={{ marginVertical: 16 }} /> : null}
-        {!busy && results.length === 0 ? <Empty text="Matching parts will appear here." /> : null}
+        {!busy && results.length === 0 ? (
+          <Empty text={uploadMessage || 'Matching parts will appear here.'} />
+        ) : null}
         {results.map((row) => (
           <StockResultCard key={`${row.partNumber}-${row.systemLocation}`} row={row} agingThreshold={agingThreshold} />
         ))}
@@ -101,6 +115,15 @@ const styles = StyleSheet.create({
     fontSize: 14,
     lineHeight: 22,
   },
+  uploadBanner: {
+    marginTop: 14,
+    padding: 14,
+    borderRadius: 14,
+    borderWidth: 1,
+    borderColor: '#f0d19a',
+    backgroundColor: '#fffaf0',
+  },
+  uploadBannerText: { color: WARNING, fontSize: 13, fontWeight: '800', lineHeight: 19 },
   summaryRow: { marginTop: 16, flexDirection: 'row' },
   summaryCard: {
     flex: 1,

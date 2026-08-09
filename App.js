@@ -170,12 +170,14 @@ export default function App() {
   const [searchResults, setSearchResults] = useState([]);
   const [searchNotFound, setSearchNotFound] = useState([]);
   const [searchBusy, setSearchBusy] = useState(false);
+  const [searchUploadMessage, setSearchUploadMessage] = useState('');
   const [agingThreshold, setAgingThreshold] = useState(90);
 
   const [multiInput, setMultiInput] = useState('');
   const [multiResults, setMultiResults] = useState([]);
   const [multiNotFound, setMultiNotFound] = useState([]);
   const [multiBusy, setMultiBusy] = useState(false);
+  const [multiUploadMessage, setMultiUploadMessage] = useState('');
 
   const [scannerTarget, setScannerTarget] = useState('verification');
   const [permission, requestPermission] = useCameraPermissions();
@@ -769,18 +771,25 @@ export default function App() {
     setSearchBusy(true);
     try {
       const response = await searchStock(q, { mode: 'prefix' });
-      const rows = (response?.results || []).map(mapStockRow);
+      const unavailable = response?.today_upload_available === false;
+      const uploadMsg = unavailable
+        ? (response?.message || "Today's stock has not been uploaded for this branch.")
+        : '';
+      setSearchUploadMessage(uploadMsg);
+      const rows = unavailable ? [] : (response?.results || []).map(mapStockRow);
       setSearchResults(rows);
       // Prefix/partial search must never list the query itself as Not Found.
-      // Not Found is only meaningful for exact Multiple Search part lists.
       setSearchNotFound([]);
-      if (!rows.length) {
-        Alert.alert('No Matches', `No parts start with or match "${q}" in your paired branch.`);
+      if (unavailable) {
+        Alert.alert('Stock Unavailable', uploadMsg);
+      } else if (!rows.length) {
+        Alert.alert('No Matches', `No parts start with or match "${q}" in today's uploaded stock.`);
       }
     } catch (error) {
       Alert.alert('Search Failed', friendlyError(error));
       setSearchResults([]);
       setSearchNotFound([]);
+      setSearchUploadMessage('');
     } finally {
       setSearchBusy(false);
     }
@@ -794,7 +803,19 @@ export default function App() {
     }
     setMultiBusy(true);
     try {
+      // Exact full part numbers only — never prefix for Multiple Search.
       const response = await searchStock(parts, { mode: 'exact' });
+      const unavailable = response?.today_upload_available === false;
+      const uploadMsg = unavailable
+        ? (response?.message || "Today's stock has not been uploaded for this branch.")
+        : '';
+      setMultiUploadMessage(uploadMsg);
+      if (unavailable) {
+        setMultiResults([]);
+        setMultiNotFound(parts);
+        Alert.alert('Stock Unavailable', uploadMsg);
+        return;
+      }
       const results = (response?.results || []).map(mapStockRow);
       const foundSet = new Set(results.map((row) => row.partNumber));
       const missing = response?.not_found?.length
@@ -806,6 +827,7 @@ export default function App() {
       Alert.alert('Search Failed', friendlyError(error));
       setMultiResults([]);
       setMultiNotFound([]);
+      setMultiUploadMessage('');
     } finally {
       setMultiBusy(false);
     }
@@ -992,6 +1014,7 @@ export default function App() {
           busy={searchBusy}
           agingThreshold={agingThreshold}
           setAgingThreshold={setAgingThreshold}
+          uploadMessage={searchUploadMessage}
         />
       )}
       {screen === 'multi-search' && (
@@ -1004,6 +1027,8 @@ export default function App() {
           notFound={multiNotFound}
           busy={multiBusy}
           agingThreshold={agingThreshold}
+          setAgingThreshold={setAgingThreshold}
+          uploadMessage={multiUploadMessage}
         />
       )}
       {screen === 'notifications' && (

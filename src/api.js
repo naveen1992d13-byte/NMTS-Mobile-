@@ -185,18 +185,15 @@ export const getStockVerificationHistory = (options = {}) => request('get', '/mo
 });
 
 /**
- * Stock search.
- * - mode 'prefix' (Product Hub style): GET ?q=26300&mode=prefix
- * - mode 'exact' (multi part): GET ?part_numbers=A\nB\nC
- * Falls back to exact part_numbers when prefix endpoint is unavailable (404/422).
+ * Stock Availability search against today's IST upload only.
+ * - mode 'prefix' (single search): GET ?q=26300&mode=prefix  (part_numbers NOT required)
+ * - mode 'exact' (Multiple Part Search): GET ?part_numbers=A\nB\nC
  */
 export async function searchStock(query, options = {}) {
   const mode = options.mode || 'exact';
   if (mode === 'prefix') {
     const q = Array.isArray(query) ? String(query[0] || '') : String(query || '');
     const needle = q.trim();
-    // Always request prefix mode. Do not fall back to exact part_numbers for a
-    // short prefix — that incorrectly reports "Not Found: 26300" when matches exist.
     return request('get', '/mobile/stock-search', {
       params: { q: needle, mode: 'prefix', limit: options.limit || 100 },
     });
@@ -204,7 +201,7 @@ export async function searchStock(query, options = {}) {
 
   const partNumbers = Array.isArray(query) ? query.join('\n') : query;
   return request('get', '/mobile/stock-search', {
-    params: { part_numbers: partNumbers },
+    params: { part_numbers: partNumbers, mode: 'exact' },
   });
 }
 
