@@ -7,13 +7,10 @@ import {
   StyleSheet,
   Text,
   TextInput,
-  TouchableOpacity,
   View,
 } from 'react-native';
-import { BLUE, BORDER, DARK, MUTED } from '../theme';
-import { Empty, Header, PrimaryButton, SecondaryButton, SquareButton, StockResultCard } from './ui';
-
-const THRESHOLDS = [30, 60, 90, 120, 180];
+import { BLUE, BORDER, DARK, MUTED, WARNING } from '../theme';
+import { AgingThresholdSelector, Empty, Header, PrimaryButton, SecondaryButton, SquareButton, StockResultCard } from './ui';
 
 export default function StockAvailabilityScreen({
   onBack,
@@ -27,6 +24,7 @@ export default function StockAvailabilityScreen({
   busy,
   agingThreshold,
   setAgingThreshold,
+  uploadMessage,
 }) {
   const inputRef = useRef(null);
 
@@ -65,22 +63,9 @@ export default function StockAvailabilityScreen({
           <PrimaryButton title="Search" onPress={onSearch} busy={busy} compact />
         </View>
 
-        <Text style={[styles.sectionLabel, { marginTop: 14 }]}>AGING THRESHOLD</Text>
-        <ScrollView horizontal showsHorizontalScrollIndicator={false} contentContainerStyle={styles.thresholdRow}>
-          {THRESHOLDS.map((days) => {
-            const active = agingThreshold === days;
-            return (
-              <TouchableOpacity
-                key={days}
-                style={[styles.thresholdChip, active && styles.thresholdChipActive]}
-                onPress={() => setAgingThreshold(days)}
-              >
-                <Text style={[styles.thresholdText, active && styles.thresholdTextActive]}>{days}d</Text>
-              </TouchableOpacity>
-            );
-          })}
-        </ScrollView>
-        <Text style={styles.hint}>Values above {agingThreshold} days are highlighted.</Text>
+        <View style={{ marginTop: 14 }}>
+          <AgingThresholdSelector value={agingThreshold} onChange={setAgingThreshold} />
+        </View>
       </View>
 
       <ScrollView
@@ -89,12 +74,17 @@ export default function StockAvailabilityScreen({
         keyboardShouldPersistTaps="handled"
         keyboardDismissMode="on-drag"
       >
+        {uploadMessage ? (
+          <View style={styles.uploadBanner}>
+            <Text style={styles.uploadBannerText}>{uploadMessage}</Text>
+          </View>
+        ) : null}
         <View style={styles.resultHeader}>
           <Text style={styles.sectionLabel}>RESULTS ({results.length})</Text>
           {busy ? <ActivityIndicator color={BLUE} /> : null}
         </View>
         {results.length === 0 && !busy ? (
-          <Empty text="Type a prefix or part number above to search." />
+          <Empty text={uploadMessage || 'Type a prefix or part number above to search.'} />
         ) : (
           results.map((row) => (
             <StockResultCard key={`${row.partNumber}-${row.systemLocation}`} row={row} agingThreshold={agingThreshold} />
@@ -134,22 +124,17 @@ const styles = StyleSheet.create({
     color: DARK,
   },
   actionRow: { marginTop: 10, flexDirection: 'row', alignItems: 'center' },
-  thresholdRow: { paddingRight: 8 },
-  thresholdChip: {
-    marginRight: 8,
-    paddingHorizontal: 12,
-    paddingVertical: 8,
-    borderRadius: 10,
-    borderWidth: 1,
-    borderColor: BORDER,
-    backgroundColor: '#f5f7fb',
-  },
-  thresholdChipActive: { backgroundColor: '#edf3ff', borderColor: BLUE },
-  thresholdText: { color: MUTED, fontWeight: '800', fontSize: 12 },
-  thresholdTextActive: { color: BLUE },
-  hint: { marginTop: 8, color: MUTED, fontSize: 11 },
   results: { padding: 14, paddingBottom: 40 },
   resultHeader: { flexDirection: 'row', justifyContent: 'space-between', alignItems: 'center' },
+  uploadBanner: {
+    marginBottom: 12,
+    padding: 14,
+    borderRadius: 14,
+    borderWidth: 1,
+    borderColor: '#f0d19a',
+    backgroundColor: '#fffaf0',
+  },
+  uploadBannerText: { color: WARNING, fontSize: 13, fontWeight: '800', lineHeight: 19 },
   notFoundBox: {
     marginTop: 12,
     padding: 14,

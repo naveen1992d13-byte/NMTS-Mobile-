@@ -1,6 +1,7 @@
 import React from 'react';
 import {
   ActivityIndicator,
+  ScrollView,
   StyleSheet,
   Text,
   TextInput,
@@ -96,6 +97,8 @@ export function SyncStatusBanner({ status }) {
   );
 }
 
+export const AGING_THRESHOLDS = [30, 60, 90, 120, 180];
+
 export function AgingBadge({ label, value, threshold }) {
   const days = typeof value === 'number' ? value : Number(String(value).match(/-?\d+(\.\d+)?/)?.[0]);
   const hot = Number.isFinite(days) && Number.isFinite(threshold) && days > threshold;
@@ -103,6 +106,30 @@ export function AgingBadge({ label, value, threshold }) {
     <View style={[styles.agingBadge, hot && styles.agingBadgeHot]}>
       <Text style={[styles.agingLabel, hot && styles.agingLabelHot]}>{label}</Text>
       <Text style={[styles.agingValue, hot && styles.agingValueHot]}>{value ?? '-'}</Text>
+    </View>
+  );
+}
+
+/** Shared aging threshold chips for Single + Multiple Stock Availability search. */
+export function AgingThresholdSelector({ value, onChange }) {
+  return (
+    <View>
+      <Text style={styles.agingSectionLabel}>AGING THRESHOLD</Text>
+      <ScrollView horizontal showsHorizontalScrollIndicator={false} contentContainerStyle={styles.thresholdRow}>
+        {AGING_THRESHOLDS.map((days) => {
+          const active = value === days;
+          return (
+            <TouchableOpacity
+              key={days}
+              style={[styles.thresholdChip, active && styles.thresholdChipActive]}
+              onPress={() => onChange(days)}
+            >
+              <Text style={[styles.thresholdText, active && styles.thresholdTextActive]}>{days}d</Text>
+            </TouchableOpacity>
+          );
+        })}
+      </ScrollView>
+      <Text style={styles.agingHint}>Values above {value} days are highlighted.</Text>
     </View>
   );
 }
@@ -237,4 +264,19 @@ const styles = StyleSheet.create({
   agingLabelHot: { color: DANGER },
   agingValue: { marginTop: 3, color: DARK, fontSize: 13, fontWeight: '900' },
   agingValueHot: { color: DANGER },
+  agingSectionLabel: { marginBottom: 8, color: DARK, fontSize: 11, fontWeight: '900' },
+  thresholdRow: { paddingRight: 8 },
+  thresholdChip: {
+    marginRight: 8,
+    paddingHorizontal: 12,
+    paddingVertical: 8,
+    borderRadius: 10,
+    borderWidth: 1,
+    borderColor: BORDER,
+    backgroundColor: '#f5f7fb',
+  },
+  thresholdChipActive: { backgroundColor: '#edf3ff', borderColor: BLUE },
+  thresholdText: { color: MUTED, fontWeight: '800', fontSize: 12 },
+  thresholdTextActive: { color: BLUE },
+  agingHint: { marginTop: 8, color: MUTED, fontSize: 11 },
 });
