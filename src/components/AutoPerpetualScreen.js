@@ -210,7 +210,9 @@ export default function AutoPerpetualScreen({
 
   const handleSave = async () => {
     if (!selected) return;
-    if (physicalQty === '' || numberValue(physicalQty) < 0) return;
+    if (physicalQty === '' || numberValue(physicalQty) < 0) {
+      return;
+    }
     setSaving(true);
     try {
       const diff = calculateVerification(selected.system_qty, physicalQty, 0);

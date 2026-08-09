@@ -731,18 +731,23 @@ export default function App() {
     setAutoSubmitting(true);
     try {
       const result = await syncQueue();
-      setAutoLocalVerified((current) => {
-        const next = { ...current };
-        Object.keys(next).forEach((part) => {
-          next[part] = { ...next[part], synced: true };
+      const stillPending = await getPendingCount().catch(() => 0);
+      setPendingCount(stillPending);
+      // Only mark local rows synced when the queue is clear for those client IDs.
+      if (!stillPending) {
+        setAutoLocalVerified((current) => {
+          const next = { ...current };
+          Object.keys(next).forEach((part) => {
+            next[part] = { ...next[part], synced: true };
+          });
+          return next;
         });
-        return next;
-      });
-      const count = await getPendingCount().catch(() => 0);
-      setPendingCount(count);
+      }
       await loadAutoTasks();
       if (result?.skipped && result?.reason === 'offline') {
         Alert.alert('Saved Offline', 'Verified parts are stored locally and will sync when online.');
+      } else if (stillPending > 0) {
+        Alert.alert('Partial Sync', `${stillPending} record(s) still pending. They will retry automatically.`);
       }
     } catch (error) {
       Alert.alert('Sync Failed', friendlyError(error));
