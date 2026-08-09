@@ -64,8 +64,14 @@ export function numberValue(value) {
 }
 
 export function mapStockRow(row = {}) {
+  // Prefer Product Hub numeric on-hand (available_qty_number) so Mobile qty matches Hub.
   const availableQty = numberValue(
-    row.available_quantity ?? row.available_qty ?? row.quantity ?? row.qty ?? row.available
+    row.available_qty_number ??
+      row.available_quantity ??
+      row.available_qty ??
+      row.quantity ??
+      row.qty ??
+      row.available
   );
   const unitValue = numberValue(row.unit_value ?? row.part_value ?? row.value ?? row.mav);
   return {
