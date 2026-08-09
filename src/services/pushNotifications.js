@@ -1,14 +1,8 @@
-// Push notification helper for Sleeping Stock Mobile (Part 13 / Part 22).
+// Push notification helper for Sleeping Stock Mobile.
 //
-// Covers: permission request, Expo push token retrieval + registration with
-// the backend, Android notification channel setup, foreground display
-// behaviour, background/killed-app delivery (handled by the OS + Expo, we
-// just need the channel + token registered), and tap-to-navigate.
-//
-// This module deliberately does NOT talk to Firebase/APNs directly — Expo's
-// push service is the transport. `app.json` -> expo.notification /
-// google-services config and EAS push credentials are what wire it to FCM
-// for a standalone (non-Expo-Go) build; see docs/MOBILE_README.md.
+// Listeners must be registered once per valid device session and cleaned up
+// on logout/unmount. Re-initializing on every screen change caused duplicate
+// handlers in earlier builds.
 import { Platform } from 'react-native';
 import * as Notifications from 'expo-notifications';
 import * as Device from 'expo-device';
@@ -19,12 +13,10 @@ const ANDROID_CHANNEL_ID = 'sleeping-stock-requests';
 
 let responseListenerSub = null;
 let receivedListenerSub = null;
+let initializedForDeviceId = null;
+let lastHandledResponseId = null;
+let teardownFn = null;
 
-/**
- * Controls how a notification is shown while the app is in the foreground.
- * Must be called once, at module load / app startup, before any
- * notification could arrive.
- */
 Notifications.setNotificationHandler({
   handleNotification: async () => ({
     shouldShowAlert: true,
@@ -47,11 +39,6 @@ async function ensureAndroidChannel() {
   });
 }
 
-/**
- * Requests notification permission (safe to call repeatedly — it's a no-op
- * once granted) and returns an Expo push token, or null if permission was
- * denied or this is a simulator/emulator without push capability.
- */
 export async function registerForPushNotificationsAsync() {
   try {
     await ensureAndroidChannel();
@@ -85,7 +72,6 @@ export async function registerForPushNotificationsAsync() {
   }
 }
 
-/** Registers the given Expo push token with the backend for this device. */
 export async function syncPushTokenWithBackend(token) {
   if (!token) return false;
   try {
@@ -97,25 +83,34 @@ export async function syncPushTokenWithBackend(token) {
   }
 }
 
+function removeListeners() {
+  receivedListenerSub?.remove();
+  responseListenerSub?.remove();
+  receivedListenerSub = null;
+  responseListenerSub = null;
+}
+
 /**
- * Full startup routine: request permission, get token, push it to the
- * backend, and wire foreground/tap listeners.
- *
- * @param {Object} handlers
- * @param {(data: any) => void} [handlers.onNotificationReceived] - fired
- *   while the app is in the foreground and a notification arrives.
- * @param {(data: any) => void} [handlers.onNotificationTapped] - fired when
- *   the user taps a notification (app was backgrounded or killed). Use this
- *   to navigate straight to the relevant request/notification screen.
- * @returns {() => void} teardown function — call on unmount.
+ * Full startup routine. Safe to call repeatedly for the same deviceId —
+ * listeners are only attached once until teardown/logout.
  */
-export async function initPushNotifications({ onNotificationReceived, onNotificationTapped } = {}) {
+export async function initPushNotifications({
+  deviceId,
+  onNotificationReceived,
+  onNotificationTapped,
+} = {}) {
+  const key = deviceId || 'default';
+  if (initializedForDeviceId === key && teardownFn) {
+    return teardownFn;
+  }
+
+  removeListeners();
+
   const token = await registerForPushNotificationsAsync();
   if (token) {
     await syncPushTokenWithBackend(token);
   }
 
-  // Foreground: app is open and visible.
   receivedListenerSub = Notifications.addNotificationReceivedListener((notification) => {
     try {
       onNotificationReceived?.(notification.request.content.data);
@@ -124,30 +119,49 @@ export async function initPushNotifications({ onNotificationReceived, onNotifica
     }
   });
 
-  // User tapped the notification — covers foreground, backgrounded, and
-  // cold-start-from-killed (Expo replays the last response on launch).
   responseListenerSub = Notifications.addNotificationResponseReceivedListener((response) => {
     try {
+      const responseId = response?.notification?.request?.identifier || JSON.stringify(response?.notification?.request?.content?.data || {});
+      if (responseId && responseId === lastHandledResponseId) return;
+      lastHandledResponseId = responseId;
       onNotificationTapped?.(response.notification.request.content.data);
     } catch (error) {
       console.log('[push] onNotificationTapped handler error', error);
     }
   });
 
-  // If the app was launched by tapping a notification (cold start), handle
-  // it once here too.
   Notifications.getLastNotificationResponseAsync()
     .then((response) => {
-      if (response) {
-        onNotificationTapped?.(response.notification.request.content.data);
-      }
+      if (!response) return;
+      const responseId = response?.notification?.request?.identifier || JSON.stringify(response?.notification?.request?.content?.data || {});
+      if (responseId && responseId === lastHandledResponseId) return;
+      lastHandledResponseId = responseId;
+      onNotificationTapped?.(response.notification.request.content.data);
     })
     .catch((error) => console.log('[push] getLastNotificationResponseAsync failed', error));
 
-  return function teardownPushNotifications() {
-    receivedListenerSub?.remove();
-    responseListenerSub?.remove();
-    receivedListenerSub = null;
-    responseListenerSub = null;
+  initializedForDeviceId = key;
+  teardownFn = function teardownPushNotifications() {
+    removeListeners();
+    initializedForDeviceId = null;
+    teardownFn = null;
   };
+  return teardownFn;
 }
+
+/**
+ * Device-only behaviours that still need a physical Android device to confirm:
+ * - OS-level FCM/Expo push delivery while backgrounded or killed
+ * - Notification shade appearance / channel sound / vibration
+ * - Cold-start tap navigation from a killed process
+ * - Duplicate suppression across process restarts
+ * - Permission denial / re-prompt flows on Android 13+
+ */
+export const PUSH_MANUAL_TEST_NOTES = [
+  'Foreground banner/alert while app is open',
+  'Background delivery while app is minimized',
+  'Killed-app delivery via FCM',
+  'Tap opens Notifications or Auto Perpetual as expected',
+  'Snooze / Skip / Pick still work after tap navigation',
+  'No duplicate handler fires after screen changes',
+];

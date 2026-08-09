@@ -1,3 +1,9 @@
+/**
+ * NOTE: The active physical-verification / stock-search OCR scanner is the
+ * `ScannerScreen` implementation inside App.js (scan-frame crop + OCR).
+ * This standalone screen is unused by the current navigation graph — keep it
+ * only as a reference. Do not wire a second conflicting scanner flow.
+ */
 import React, { useEffect, useMemo, useRef, useState } from 'react';
 import {
   ActivityIndicator,
