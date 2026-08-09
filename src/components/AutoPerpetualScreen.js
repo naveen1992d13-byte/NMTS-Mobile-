@@ -1,6 +1,7 @@
 import React, { useMemo, useState } from 'react';
 import {
   ActivityIndicator,
+  Alert,
   KeyboardAvoidingView,
   Modal,
   Platform,
@@ -211,6 +212,7 @@ export default function AutoPerpetualScreen({
   const handleSave = async () => {
     if (!selected) return;
     if (physicalQty === '' || numberValue(physicalQty) < 0) {
+      Alert.alert('Physical Quantity', 'Enter a valid physical quantity.');
       return;
     }
     setSaving(true);
