@@ -14,7 +14,6 @@ import { submitStockVerification, submitStockVerificationBatch, ApiError } from 
 
 const DB_NAME = 'sleeping_stock_offline.db';
 const MAX_RETRY_BEFORE_BACKOFF = 3;
-const PARALLEL_CHUNK_SIZE = 8;
 
 let dbPromise = null;
 let isSyncing = false;
@@ -190,45 +189,37 @@ async function markFailed(db, clientId, message) {
 }
 
 async function syncRowsParallel(db, rows) {
+  // Serialize verification submits so concurrent get-or-create cannot race-mint
+  // multiple daily session IDs. Idempotency via client_id is unchanged.
   let synced = 0;
   let failed = 0;
   let networkDropped = false;
 
-  for (let i = 0; i < rows.length; i += PARALLEL_CHUNK_SIZE) {
+  for (let i = 0; i < rows.length; i += 1) {
     if (networkDropped) break;
-    const chunk = rows.slice(i, i + PARALLEL_CHUNK_SIZE);
+    const row = rows[i];
     setSyncStatus({
       state: 'syncing',
-      syncing: chunk.length,
+      syncing: 1,
       pending: Math.max(0, rows.length - i),
-      message: `Syncing ${Math.min(PARALLEL_CHUNK_SIZE, rows.length - i)}...`,
+      message: `Syncing ${i + 1}/${rows.length}...`,
     });
 
-    await Promise.all(chunk.map(async (row) => {
-      await db.runAsync(
-        `UPDATE verification_queue SET sync_status = 'syncing' WHERE client_id = ?`,
-        [row.client_id]
-      );
-    }));
-
-    const results = await Promise.allSettled(
-      chunk.map((row) => submitStockVerification(rowToPayload(row)))
+    await db.runAsync(
+      `UPDATE verification_queue SET sync_status = 'syncing' WHERE client_id = ?`,
+      [row.client_id]
     );
 
-    for (let idx = 0; idx < chunk.length; idx += 1) {
-      const row = chunk[idx];
-      const result = results[idx];
-      if (result.status === 'fulfilled') {
-        await db.runAsync(`DELETE FROM verification_queue WHERE client_id = ?`, [row.client_id]);
-        synced += 1;
-      } else {
-        failed += 1;
-        const error = result.reason;
-        const message = error instanceof ApiError ? error.message : String(error?.message || error);
-        await markFailed(db, row.client_id, message);
-        if (error instanceof ApiError && (error.kind === 'network' || error.kind === 'timeout')) {
-          networkDropped = true;
-        }
+    try {
+      await submitStockVerification(rowToPayload(row));
+      await db.runAsync(`DELETE FROM verification_queue WHERE client_id = ?`, [row.client_id]);
+      synced += 1;
+    } catch (error) {
+      failed += 1;
+      const message = error instanceof ApiError ? error.message : String(error?.message || error);
+      await markFailed(db, row.client_id, message);
+      if (error instanceof ApiError && (error.kind === 'network' || error.kind === 'timeout')) {
+        networkDropped = true;
       }
     }
   }
