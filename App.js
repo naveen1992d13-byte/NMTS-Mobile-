@@ -264,12 +264,16 @@ export default function App() {
   const loadAutoTasks = useCallback(async () => {
     setAutoBusy(true);
     try {
-      const [data, sessionResp] = await Promise.all([
-        getAutoPerpetualTasks(),
-        getAutoPerpetualSessionToday().catch(() => null),
-      ]);
+      // Load today's authoritative session once, then reuse that ID for every
+      // verification on this screen. Backend get-or-create is idempotent per IST day.
+      const sessionResp = await getAutoPerpetualSessionToday();
+      const dailySessionId = sessionResp?.session_id || '';
+      setAutoSessionId(dailySessionId);
+
+      const data = await getAutoPerpetualTasks();
       setAutoTasks(data?.tasks || []);
-      setAutoSessionId(sessionResp?.session_id || data?.session_id || '');
+      // Prefer the session/today ID; tasks.session_id must match after backend fix.
+      if (!dailySessionId && data?.session_id) setAutoSessionId(data.session_id);
       setAutoAssignedCount(numberValue(data?.assigned_count || data?.tasks?.length || 0));
       setAutoCompletedCount(numberValue(data?.completed_count || 0));
       // Drop local entries that are no longer in today's pending list once server completed them.
@@ -765,8 +769,14 @@ export default function App() {
     setSearchBusy(true);
     try {
       const response = await searchStock(q, { mode: 'prefix' });
-      setSearchResults((response?.results || []).map(mapStockRow));
-      setSearchNotFound(response?.not_found || []);
+      const rows = (response?.results || []).map(mapStockRow);
+      setSearchResults(rows);
+      // Prefix/partial search must never list the query itself as Not Found.
+      // Not Found is only meaningful for exact Multiple Search part lists.
+      setSearchNotFound([]);
+      if (!rows.length) {
+        Alert.alert('No Matches', `No parts start with or match "${q}" in your paired branch.`);
+      }
     } catch (error) {
       Alert.alert('Search Failed', friendlyError(error));
       setSearchResults([]);
