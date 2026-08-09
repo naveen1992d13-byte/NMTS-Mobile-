@@ -29,6 +29,7 @@ import { getSession, saveSession, clearSession } from './src/services/session';
 import {
   ApiError,
   setOnSessionInvalidated,
+  clearApiAuthCache,
   verifyPairing,
   validateSession,
   getNotifications,
@@ -45,6 +46,7 @@ import {
   enqueueAndTrySync,
   getPendingCount,
   subscribeToQueueChanges,
+  subscribeToSyncStatus,
   startAutoSync,
   syncQueue,
 } from './src/services/offlineQueue';
@@ -52,17 +54,31 @@ import {
   initPushNotifications,
   registerForPushNotificationsAsync,
 } from './src/services/pushNotifications';
-
-const BLUE = '#2458c6';
-const DARK = '#14213d';
-const BG = '#f3f6fb';
-const BORDER = '#d9e1ef';
-const MUTED = '#718096';
-const SUCCESS = '#168a45';
-const WARNING = '#d97706';
-const DANGER = '#d13c3c';
+import {
+  normalizePartNumber,
+  splitPartNumbers,
+  mapStockRow,
+  calculateVerification,
+  numberValue,
+} from './src/utils/stockHelpers';
+import { BLUE, BG, BORDER, DANGER, DARK, MUTED, SUCCESS } from './src/theme';
+import AutoPerpetualScreen from './src/components/AutoPerpetualScreen';
+import StockAvailabilityScreen from './src/components/StockAvailabilityScreen';
+import MultiPartSearchScreen from './src/components/MultiPartSearchScreen';
+import MandatoryUpdateScreen from './src/components/MandatoryUpdateScreen';
+import {
+  Empty,
+  Field,
+  Header,
+  PrimaryButton,
+  SecondaryButton,
+  SquareButton,
+  StatusPill,
+  SyncStatusBanner,
+} from './src/components/ui';
 
 const CURRENT_VERSION_CODE = Constants.expoConfig?.android?.versionCode || 1;
+const CURRENT_VERSION_NAME = Constants.expoConfig?.version || '1.0.0';
 
 function friendlyError(error) {
   if (error instanceof ApiError) return error.message;
@@ -70,10 +86,7 @@ function friendlyError(error) {
 }
 
 function cleanPartNumber(value) {
-  return String(value || '')
-    .toUpperCase()
-    .replace(/[^A-Z0-9]/g, '')
-    .slice(0, 40);
+  return normalizePartNumber(value);
 }
 
 function extractPartDetails(text) {
@@ -109,41 +122,8 @@ function extractPartDetails(text) {
   return { partNumber, description };
 }
 
-function numberValue(value) {
-  const n = Number(value);
-  return Number.isFinite(n) ? n : 0;
-}
-
-function mapStockRow(row = {}) {
-  const availableQty = numberValue(
-    row.available_quantity ?? row.available_qty ?? row.quantity ?? row.qty ?? row.available
-  );
-  const unitValue = numberValue(row.unit_value ?? row.part_value ?? row.value ?? row.mav);
-  return {
-    raw: row,
-    partNumber: cleanPartNumber(row.part_number ?? row.partNumber ?? row.part_no ?? row.partNo),
-    partName: row.part_name ?? row.partName ?? row.description ?? row.name ?? '-',
-    systemQty: numberValue(row.system_quantity ?? row.system_qty ?? row.quantity ?? row.qty),
-    availableQty,
-    systemLocation: row.system_location ?? row.loc ?? row.location ?? '-',
-    unitValue,
-    totalValue: availableQty * unitValue,
-    category: row.part_category ?? row.category ?? '-',
-    purchaseAging: row.purchase_aging ?? row.purchaseAging ?? '-',
-    salesAging: row.sales_aging ?? row.salesAging ?? '-',
-    lastUpdated: row.last_updated ?? row.updated_at ?? row.uploaded_at ?? '-',
-    status: availableQty > 0 ? 'AVAILABLE' : 'NOT AVAILABLE',
-  };
-}
-
 function differenceFor(systemQty, physicalQty, unitValue) {
-  const diff = numberValue(physicalQty) - numberValue(systemQty);
-  return {
-    status: diff === 0 ? 'MATCHED' : diff < 0 ? 'SHORTAGE' : 'EXCESS',
-    shortageQty: diff < 0 ? Math.abs(diff) : 0,
-    excessQty: diff > 0 ? diff : 0,
-    differenceValue: Math.abs(diff) * numberValue(unitValue),
-  };
+  return calculateVerification(systemQty, physicalQty, unitValue);
 }
 
 export default function App() {
@@ -152,6 +132,8 @@ export default function App() {
   const [session, setSession] = useState(null);
   const [isOffline, setIsOffline] = useState(false);
   const [pendingCount, setPendingCount] = useState(0);
+  const [syncStatus, setSyncStatus] = useState({ state: 'idle', message: '' });
+  const [mandatoryUpdate, setMandatoryUpdate] = useState(null);
 
   const [mobileUserId, setMobileUserId] = useState('');
   const [userName, setUserName] = useState('');
@@ -174,18 +156,26 @@ export default function App() {
   const [selectedPart, setSelectedPart] = useState(null);
   const [verificationList, setVerificationList] = useState([]);
   const [verificationBusy, setVerificationBusy] = useState(false);
+  const [damageQty, setDamageQty] = useState('');
 
   const [autoTasks, setAutoTasks] = useState([]);
   const [autoSessionId, setAutoSessionId] = useState('');
   const [autoBusy, setAutoBusy] = useState(false);
-  const [autoSelected, setAutoSelected] = useState(null);
-  const [autoDamageQty, setAutoDamageQty] = useState('');
-  const [damageQty, setDamageQty] = useState('');
+  const [autoAssignedCount, setAutoAssignedCount] = useState(0);
+  const [autoCompletedCount, setAutoCompletedCount] = useState(0);
+  const [autoLocalVerified, setAutoLocalVerified] = useState({});
+  const [autoSubmitting, setAutoSubmitting] = useState(false);
 
   const [searchInput, setSearchInput] = useState('');
-  const [searchParts, setSearchParts] = useState([]);
   const [searchResults, setSearchResults] = useState([]);
+  const [searchNotFound, setSearchNotFound] = useState([]);
   const [searchBusy, setSearchBusy] = useState(false);
+  const [agingThreshold, setAgingThreshold] = useState(90);
+
+  const [multiInput, setMultiInput] = useState('');
+  const [multiResults, setMultiResults] = useState([]);
+  const [multiNotFound, setMultiNotFound] = useState([]);
+  const [multiBusy, setMultiBusy] = useState(false);
 
   const [scannerTarget, setScannerTarget] = useState('verification');
   const [permission, requestPermission] = useCameraPermissions();
@@ -194,24 +184,36 @@ export default function App() {
   const scanLine = useRef(new Animated.Value(0)).current;
   const scanFrameLayout = useRef({ x: 36, y: 190, width: 320, height: 120 });
   const cameraLayout = useRef({ width: 390, height: 700 });
+  const screenRef = useRef(screen);
+  const loadAutoTasksRef = useRef(null);
+  const loadNotificationsRef = useRef(null);
+
+  useEffect(() => {
+    screenRef.current = screen;
+  }, [screen]);
 
   useEffect(() => {
     let mounted = true;
-    const stopAutoSync = startAutoSync();
+    const stopAutoSync = startAutoSync({ periodicIntervalMs: 30000 });
     const unsubscribeQueue = subscribeToQueueChanges(async () => {
       try {
         const count = await getPendingCount();
         if (mounted) setPendingCount(count);
       } catch (_e) {}
     });
+    const unsubscribeSync = subscribeToSyncStatus((status) => {
+      if (mounted) setSyncStatus(status);
+    });
     const unsubscribeNetwork = NetInfo.addEventListener((state) => {
       if (mounted) setIsOffline(!(state.isConnected && state.isInternetReachable !== false));
     });
 
     setOnSessionInvalidated(async () => {
+      clearApiAuthCache();
       await clearSession();
       if (!mounted) return;
       setSession(null);
+      setMandatoryUpdate(null);
       setScreen('pair');
       Alert.alert('Session Ended', 'This mobile must be paired again.');
     });
@@ -226,7 +228,11 @@ export default function App() {
       try {
         const latest = await getLatestAppVersion();
         if (latest?.mandatory && numberValue(latest.version_code) > CURRENT_VERSION_CODE) {
-          Alert.alert('Update Required', 'Install the latest APK before continuing.');
+          if (mounted) {
+            setMandatoryUpdate(latest);
+            setBooting(false);
+            return;
+          }
         }
       } catch (_e) {}
 
@@ -250,24 +256,77 @@ export default function App() {
       mounted = false;
       stopAutoSync?.();
       unsubscribeQueue?.();
+      unsubscribeSync?.();
       unsubscribeNetwork?.();
     };
   }, []);
 
+  const loadAutoTasks = useCallback(async () => {
+    setAutoBusy(true);
+    try {
+      // Load today's authoritative session once, then reuse that ID for every
+      // verification on this screen. Backend get-or-create is idempotent per IST day.
+      const sessionResp = await getAutoPerpetualSessionToday();
+      const dailySessionId = sessionResp?.session_id || '';
+      setAutoSessionId(dailySessionId);
+
+      const data = await getAutoPerpetualTasks();
+      setAutoTasks(data?.tasks || []);
+      // Prefer the session/today ID; tasks.session_id must match after backend fix.
+      if (!dailySessionId && data?.session_id) setAutoSessionId(data.session_id);
+      setAutoAssignedCount(numberValue(data?.assigned_count || data?.tasks?.length || 0));
+      setAutoCompletedCount(numberValue(data?.completed_count || 0));
+      // Drop local entries that are no longer in today's pending list once server completed them.
+      setAutoLocalVerified((current) => {
+        const pendingParts = new Set((data?.tasks || []).map((t) => cleanPartNumber(t.part_number)));
+        const next = {};
+        Object.entries(current).forEach(([part, row]) => {
+          if (pendingParts.has(part) || !row.synced) next[part] = row;
+        });
+        return next;
+      });
+    } catch (error) {
+      Alert.alert('Auto Perpetual', friendlyError(error));
+      setAutoTasks([]);
+    } finally {
+      setAutoBusy(false);
+    }
+  }, []);
+
+  const loadNotifications = useCallback(async () => {
+    setNotificationsBusy(true);
+    try {
+      const rows = await getNotifications();
+      setNotifications(rows || []);
+    } catch (error) {
+      Alert.alert('Notifications', friendlyError(error));
+    } finally {
+      setNotificationsBusy(false);
+    }
+  }, []);
+
   useEffect(() => {
-    if (!session) return undefined;
+    loadAutoTasksRef.current = loadAutoTasks;
+    loadNotificationsRef.current = loadNotifications;
+  }, [loadAutoTasks, loadNotifications]);
+
+  // Register push listeners once per device session — not on every screen change.
+  useEffect(() => {
+    if (!session?.deviceId) return undefined;
     let teardown = () => {};
     initPushNotifications({
+      deviceId: session.deviceId,
       onNotificationReceived: (data) => {
-        if (data?.type === 'auto_perpetual') loadAutoTasks();
-        if (screen === 'notifications') loadNotifications();
+        if (data?.type === 'auto_perpetual') loadAutoTasksRef.current?.();
+        if (screenRef.current === 'notifications') loadNotificationsRef.current?.();
       },
       onNotificationTapped: (data) => {
         if (data?.type === 'auto_perpetual') {
-          loadAutoTasks().finally(() => setScreen('auto'));
+          loadAutoTasksRef.current?.()?.finally?.(() => setScreen('auto'));
           return;
         }
         setScreen('notifications');
+        loadNotificationsRef.current?.();
       },
     })
       .then((fn) => {
@@ -275,12 +334,11 @@ export default function App() {
       })
       .catch(() => {});
     return () => teardown();
-  }, [session?.deviceId, screen]);
-
+  }, [session?.deviceId]);
 
   useEffect(() => {
     const handleHardwareBack = () => {
-      if (booting) return true;
+      if (booting || mandatoryUpdate) return true;
 
       if (screen === 'scanner') {
         setPairingScanned(false);
@@ -290,7 +348,9 @@ export default function App() {
             ? 'pair'
             : scannerTarget === 'verification'
               ? 'verification'
-              : 'search'
+              : scannerTarget === 'search'
+                ? 'search'
+                : 'multi-search'
         );
         return true;
       }
@@ -300,19 +360,27 @@ export default function App() {
         return true;
       }
 
+      if (screen === 'multi-search') {
+        setScreen('search');
+        return true;
+      }
+
       if (screen === 'verification' || screen === 'search' || screen === 'notifications' || screen === 'auto') {
         setScreen('home');
         return true;
       }
 
-      // Do not let Android close the app from the Home or Pairing screen.
-      // The user can use the visible Logout action when required.
-      return true;
+      // Home / Pair root: allow normal Android exit behaviour (do not trap).
+      if (screen === 'home' || screen === 'pair') {
+        return false;
+      }
+
+      return false;
     };
 
     const subscription = BackHandler.addEventListener('hardwareBackPress', handleHardwareBack);
     return () => subscription.remove();
-  }, [booting, screen, scannerTarget]);
+  }, [booting, screen, scannerTarget, mandatoryUpdate]);
 
   useEffect(() => {
     if (screen !== 'scanner') return undefined;
@@ -327,6 +395,14 @@ export default function App() {
     return () => animation.stop();
   }, [screen, scanLine]);
 
+  useEffect(() => {
+    if (screen === 'auto') loadAutoTasks();
+  }, [screen, loadAutoTasks]);
+
+  useEffect(() => {
+    if (screen === 'notifications') loadNotifications();
+  }, [screen, loadNotifications]);
+
   const pairDevice = async ({ qrMobileUserId, pairingType, qrPairingCode, apiBaseUrl, pairingToken }) => {
     if (!userName.trim() || !mobileNumber.trim()) {
       Alert.alert('Required', 'Enter your name and mobile number before scanning the QR code.');
@@ -339,8 +415,31 @@ export default function App() {
     setPairingBusy(true);
     try {
       const pushToken = await registerForPushNotificationsAsync().catch(() => null);
-      const result = await verifyPairing({ mobileUserId: qrMobileUserId?.trim()?.toUpperCase() || null, pairingType, pairingCode: qrPairingCode.trim().toUpperCase(), pairingToken, apiBaseUrl, deviceUserName: userName.trim(), deviceUserMobile: mobileNumber.trim(), deviceName: Device.deviceName || `${Platform.OS} device`, deviceInfo: `${Device.modelName || 'Unknown'} • ${Device.osName || Platform.OS} ${Device.osVersion || ''}`, appVersion: Constants.expoConfig?.version || '1.0.0', pushToken });
-      const nextSession = { apiBaseUrl, sessionToken: result.session_token, deviceId: result.device_id, mobileUserId: result.mobile_user_id, name: result.device_user_name || result.name || userName.trim(), deviceUserMobile: result.device_user_mobile || mobileNumber.trim(), brandName: result.brand_name, dealerName: result.dealer_name, branch: result.branch };
+      const result = await verifyPairing({
+        mobileUserId: qrMobileUserId?.trim()?.toUpperCase() || null,
+        pairingType,
+        pairingCode: qrPairingCode.trim().toUpperCase(),
+        pairingToken,
+        apiBaseUrl,
+        deviceUserName: userName.trim(),
+        deviceUserMobile: mobileNumber.trim(),
+        deviceName: Device.deviceName || `${Platform.OS} device`,
+        deviceInfo: `${Device.modelName || 'Unknown'} • ${Device.osName || Platform.OS} ${Device.osVersion || ''}`,
+        appVersion: CURRENT_VERSION_NAME,
+        pushToken,
+      });
+      const nextSession = {
+        apiBaseUrl,
+        sessionToken: result.session_token,
+        deviceId: result.device_id,
+        mobileUserId: result.mobile_user_id,
+        name: result.device_user_name || result.name || userName.trim(),
+        deviceUserMobile: result.device_user_mobile || mobileNumber.trim(),
+        brandName: result.brand_name,
+        dealerName: result.dealer_name,
+        branch: result.branch,
+      };
+      clearApiAuthCache();
       await saveSession(nextSession);
       setSession(nextSession);
       setPairingScanned(false);
@@ -348,7 +447,9 @@ export default function App() {
     } catch (error) {
       setPairingScanned(false);
       Alert.alert('Pairing Failed', friendlyError(error));
-    } finally { setPairingBusy(false); }
+    } finally {
+      setPairingBusy(false);
+    }
   };
 
   const handlePairingQr = ({ data }) => {
@@ -358,18 +459,38 @@ export default function App() {
       const parsed = JSON.parse(String(data || ''));
       const apiBaseUrl = parsed?.api_base_url || parsed?.apiBaseUrl;
       const pairingType = String(parsed?.pairing_type || (parsed?.mobile_user_id ? 'REPAIR' : 'NEW')).toUpperCase();
-      const valid = parsed?.issuer === 'NMTS_SLEEPING_STOCK_PAIRING' && [2, 3].includes(Number(parsed?.version)) && ['NEW', 'REPAIR'].includes(pairingType) && parsed?.pairing_code && parsed?.pairing_token && apiBaseUrl && (pairingType !== 'REPAIR' || parsed?.mobile_user_id);
+      const valid =
+        parsed?.issuer === 'NMTS_SLEEPING_STOCK_PAIRING' &&
+        [2, 3].includes(Number(parsed?.version)) &&
+        ['NEW', 'REPAIR'].includes(pairingType) &&
+        parsed?.pairing_code &&
+        parsed?.pairing_token &&
+        apiBaseUrl &&
+        (pairingType !== 'REPAIR' || parsed?.mobile_user_id);
       if (!valid) throw new Error('invalid-nmts-qr');
       const detectedId = parsed?.mobile_user_id ? String(parsed.mobile_user_id).trim().toUpperCase() : '';
       setMobileUserId(detectedId);
       setPairingCode(String(parsed.pairing_code).trim().toUpperCase());
-      Alert.alert('NMTS QR Detected', pairingType === 'REPAIR' ? `Re-pair Mobile User: ${detectedId}
-Server: ${apiBaseUrl}` : `New Mobile User Pairing
-Your Mobile User ID will be created after verification.
-Server: ${apiBaseUrl}`, [
-        { text: 'Scan Again', style: 'cancel', onPress: () => setPairingScanned(false) },
-        { text: pairingType === 'REPAIR' ? 'Re-pair Device' : 'Pair Device', onPress: () => pairDevice({ qrMobileUserId: detectedId, pairingType, qrPairingCode: String(parsed.pairing_code), apiBaseUrl: String(apiBaseUrl), pairingToken: String(parsed.pairing_token) }) },
-      ]);
+      Alert.alert(
+        'NMTS QR Detected',
+        pairingType === 'REPAIR'
+          ? `Re-pair Mobile User: ${detectedId}\nServer: ${apiBaseUrl}`
+          : `New Mobile User Pairing\nYour Mobile User ID will be created after verification.\nServer: ${apiBaseUrl}`,
+        [
+          { text: 'Scan Again', style: 'cancel', onPress: () => setPairingScanned(false) },
+          {
+            text: pairingType === 'REPAIR' ? 'Re-pair Device' : 'Pair Device',
+            onPress: () =>
+              pairDevice({
+                qrMobileUserId: detectedId,
+                pairingType,
+                qrPairingCode: String(parsed.pairing_code),
+                apiBaseUrl: String(apiBaseUrl),
+                pairingToken: String(parsed.pairing_token),
+              }),
+          },
+        ]
+      );
     } catch (_error) {
       Alert.alert('Invalid QR Code', 'Scan only the pairing QR code generated from the NMTS website.');
       setPairingScanned(false);
@@ -377,6 +498,7 @@ Server: ${apiBaseUrl}`, [
   };
 
   const logout = async () => {
+    clearApiAuthCache();
     await clearSession();
     setSession(null);
     setScreen('pair');
@@ -386,7 +508,12 @@ Server: ${apiBaseUrl}`, [
     if (!permission?.granted) {
       const result = await requestPermission();
       if (!result.granted) {
-        Alert.alert('Camera Permission', target === 'pairing' ? 'Camera permission is required to scan the NMTS pairing QR code.' : 'Camera permission is required to scan a part number.');
+        Alert.alert(
+          'Camera Permission',
+          target === 'pairing'
+            ? 'Camera permission is required to scan the NMTS pairing QR code.'
+            : 'Camera permission is required to scan a part number.'
+        );
         return;
       }
     }
@@ -436,9 +563,11 @@ Server: ${apiBaseUrl}`, [
         setVerificationInput(detected);
         setScreen('verification');
         await lookupVerificationPart(detected, description || '');
+      } else if (scannerTarget === 'multi-search') {
+        setMultiInput((current) => `${current ? `${current}\n` : ''}${detected}`);
+        setScreen('multi-search');
       } else {
-        setSearchParts((current) => (current.includes(detected) ? current : [...current, detected]));
-        setSearchInput('');
+        setSearchInput(detected);
         setScreen('search');
       }
     } catch (error) {
@@ -456,8 +585,9 @@ Server: ${apiBaseUrl}`, [
     }
     setVerificationBusy(true);
     try {
-      const response = await searchStock(cleaned);
-      const match = (response?.results || []).map(mapStockRow).find((row) => row.partNumber === cleaned) ||
+      const response = await searchStock(cleaned, { mode: 'exact' });
+      const match =
+        (response?.results || []).map(mapStockRow).find((row) => row.partNumber === cleaned) ||
         (response?.results || []).map(mapStockRow)[0];
       if (!match) {
         setSelectedPart(null);
@@ -522,6 +652,7 @@ Server: ${apiBaseUrl}`, [
       physicalLocation: physicalLocation.trim().toUpperCase(),
       remark: verificationRemark.trim(),
       damageQty: numberValue(damageQty),
+      verificationType: 'physical',
       ...difference,
     };
     setVerificationList((current) => [...current.filter((x) => x.partNumber !== row.partNumber), row]);
@@ -530,94 +661,33 @@ Server: ${apiBaseUrl}`, [
     setPhysicalQty('');
     setPhysicalLocation('');
     setVerificationRemark('');
+    setDamageQty('');
     setScannedPartDescription('');
-  };
-
-  const loadAutoTasks = useCallback(async () => {
-    setAutoBusy(true);
-    try {
-      const data = await getAutoPerpetualTasks();
-      setAutoTasks(data?.tasks || []);
-      setAutoSessionId(data?.session_id || '');
-    } catch (error) {
-      Alert.alert('Auto Perpetual', friendlyError(error));
-      setAutoTasks([]);
-    } finally {
-      setAutoBusy(false);
-    }
-  }, []);
-
-  useEffect(() => {
-    if (screen === 'auto') loadAutoTasks();
-  }, [screen, loadAutoTasks]);
-
-  const selectAutoTask = (task) => {
-    setAutoSelected(task);
-    setVerificationInput(cleanPartNumber(task.part_number));
-    setSelectedPart({
-      partNumber: cleanPartNumber(task.part_number),
-      partName: task.part_name || '-',
-      systemQty: numberValue(task.system_qty),
-      availableQty: numberValue(task.system_qty),
-      systemLocation: task.loc || '-',
-      unitValue: 0,
-    });
-    setPhysicalLocation(task.loc && task.loc !== '-' ? task.loc : '');
-    setPhysicalQty('');
-    setAutoDamageQty('');
-    setVerificationRemark('');
-  };
-
-  const submitAutoVerification = async () => {
-    if (!autoSelected) return Alert.alert('Select Part', 'Choose an assigned part from today\'s list.');
-    if (physicalQty === '' || numberValue(physicalQty) < 0) return Alert.alert('Physical Quantity', 'Enter a valid physical quantity.');
-    setAutoBusy(true);
-    try {
-      const sessionResp = await getAutoPerpetualSessionToday().catch(() => ({ session_id: autoSessionId }));
-      await enqueueAndTrySync({
-        partNumber: cleanPartNumber(autoSelected.part_number),
-        partName: autoSelected.part_name || '',
-        physicalQty: numberValue(physicalQty),
-        location: (physicalLocation || autoSelected.loc || '').trim().toUpperCase(),
-        remark: verificationRemark.trim(),
-        entryMethod: 'MANUAL_OR_CAMERA',
-        verificationSessionId: sessionResp?.session_id || autoSessionId || '',
-        isNewPart: false,
-        verificationType: 'auto',
-        damageQty: numberValue(autoDamageQty),
-      });
-      Alert.alert('Saved', 'Auto Perpetual verification queued for sync.');
-      setAutoSelected(null);
-      setPhysicalQty('');
-      setAutoDamageQty('');
-      setVerificationRemark('');
-      await loadAutoTasks();
-    } catch (error) {
-      Alert.alert('Submit Failed', friendlyError(error));
-    } finally {
-      setAutoBusy(false);
-    }
   };
 
   const submitVerificationList = async () => {
     if (!verificationList.length) return;
+    // Instant local enqueue — do not block UI on network.
     setVerificationBusy(true);
     try {
-      for (const row of verificationList) {
-        await enqueueAndTrySync({
-          partNumber: cleanPartNumber(row.partNumber),
-          partName: row.partName || '',
-          physicalQty: row.physicalQty,
-          location: row.physicalLocation,
-          remark: row.remark,
-          entryMethod: 'MANUAL_OR_CAMERA',
-          verificationSessionId: '',
-          isNewPart: Boolean(row.isNewPart),
-          verificationType: 'physical',
-          damageQty: numberValue(row.damageQty || 0),
-        });
-      }
-      Alert.alert('Saved', `${verificationList.length} verification record(s) saved. Pending records will sync automatically.`);
+      await Promise.all(
+        verificationList.map((row) =>
+          enqueueAndTrySync({
+            partNumber: cleanPartNumber(row.partNumber),
+            partName: row.partName || '',
+            physicalQty: row.physicalQty,
+            location: row.physicalLocation,
+            remark: row.remark,
+            entryMethod: 'MANUAL_OR_CAMERA',
+            // Backend creates the authoritative daily MOPS session (IST).
+            verificationSessionId: '',
+            isNewPart: Boolean(row.isNewPart),
+            verificationType: row.verificationType || 'physical',
+            damageQty: numberValue(row.damageQty || 0),
+          })
+        )
+      );
+      Alert.alert('Saved', `${verificationList.length} verification record(s) saved locally. Sync continues in the background.`);
       setVerificationList([]);
       const count = await getPendingCount().catch(() => pendingCount);
       setPendingCount(count);
@@ -628,51 +698,118 @@ Server: ${apiBaseUrl}`, [
     }
   };
 
-  const addSearchInput = () => {
-    const parts = searchInput
-      .split(/[\n,;\s]+/)
-      .map(cleanPartNumber)
-      .filter(Boolean);
-    if (!parts.length) return;
-    setSearchParts((current) => Array.from(new Set([...current, ...parts])));
-    setSearchInput('');
+  const saveAutoLocal = async ({ task, physicalQty: qty, damageQty: dmg, location, remark, status, differenceQty }) => {
+    const partNumber = cleanPartNumber(task.part_number);
+    // Instant local queue write — no await on network.
+    const clientId = await enqueueAndTrySync({
+      partNumber,
+      partName: task.part_name || '',
+      physicalQty: qty,
+      location,
+      remark,
+      entryMethod: 'MANUAL_OR_CAMERA',
+      verificationSessionId: autoSessionId || '',
+      isNewPart: false,
+      verificationType: 'auto',
+      damageQty: dmg,
+    });
+    setAutoLocalVerified((current) => ({
+      ...current,
+      [partNumber]: {
+        verified: true,
+        synced: false,
+        clientId,
+        physicalQty: qty,
+        damageQty: dmg,
+        location,
+        remark,
+        status,
+        differenceQty,
+      },
+    }));
+    const count = await getPendingCount().catch(() => pendingCount + 1);
+    setPendingCount(count);
   };
 
-  const runSearch = async () => {
-    const inline = searchInput.split(/[\n,;\s]+/).map(cleanPartNumber).filter(Boolean);
-    const parts = Array.from(new Set([...searchParts, ...inline]));
-    if (!parts.length) {
-      Alert.alert('Part Number', 'Enter, paste or scan one or more part numbers.');
+  const submitAutoVerified = async () => {
+    setAutoSubmitting(true);
+    try {
+      const result = await syncQueue();
+      const stillPending = await getPendingCount().catch(() => 0);
+      setPendingCount(stillPending);
+      // Only mark local rows synced when the queue is clear for those client IDs.
+      if (!stillPending) {
+        setAutoLocalVerified((current) => {
+          const next = { ...current };
+          Object.keys(next).forEach((part) => {
+            next[part] = { ...next[part], synced: true };
+          });
+          return next;
+        });
+      }
+      await loadAutoTasks();
+      if (result?.skipped && result?.reason === 'offline') {
+        Alert.alert('Saved Offline', 'Verified parts are stored locally and will sync when online.');
+      } else if (stillPending > 0) {
+        Alert.alert('Partial Sync', `${stillPending} record(s) still pending. They will retry automatically.`);
+      }
+    } catch (error) {
+      Alert.alert('Sync Failed', friendlyError(error));
+    } finally {
+      setAutoSubmitting(false);
+    }
+  };
+
+  const runPrefixSearch = async () => {
+    const q = String(searchInput || '').trim();
+    if (!q) {
+      Alert.alert('Search', 'Enter a part number prefix or description.');
       return;
     }
-    setSearchParts(parts);
     setSearchBusy(true);
     try {
-      const response = await searchStock(parts.join('\n'));
-      setSearchResults((response?.results || []).map(mapStockRow));
+      const response = await searchStock(q, { mode: 'prefix' });
+      const rows = (response?.results || []).map(mapStockRow);
+      setSearchResults(rows);
+      // Prefix/partial search must never list the query itself as Not Found.
+      // Not Found is only meaningful for exact Multiple Search part lists.
+      setSearchNotFound([]);
+      if (!rows.length) {
+        Alert.alert('No Matches', `No parts start with or match "${q}" in your paired branch.`);
+      }
     } catch (error) {
       Alert.alert('Search Failed', friendlyError(error));
       setSearchResults([]);
+      setSearchNotFound([]);
     } finally {
       setSearchBusy(false);
     }
   };
 
-  const loadNotifications = useCallback(async () => {
-    setNotificationsBusy(true);
-    try {
-      const rows = await getNotifications();
-      setNotifications(rows || []);
-    } catch (error) {
-      Alert.alert('Notifications', friendlyError(error));
-    } finally {
-      setNotificationsBusy(false);
+  const runMultiSearch = async () => {
+    const parts = splitPartNumbers(multiInput);
+    if (!parts.length) {
+      Alert.alert('Part Numbers', 'Paste or type one or more part numbers.');
+      return;
     }
-  }, []);
-
-  useEffect(() => {
-    if (screen === 'notifications') loadNotifications();
-  }, [screen, loadNotifications]);
+    setMultiBusy(true);
+    try {
+      const response = await searchStock(parts, { mode: 'exact' });
+      const results = (response?.results || []).map(mapStockRow);
+      const foundSet = new Set(results.map((row) => row.partNumber));
+      const missing = response?.not_found?.length
+        ? response.not_found.map(cleanPartNumber).filter(Boolean)
+        : parts.filter((part) => !foundSet.has(part));
+      setMultiResults(results);
+      setMultiNotFound(missing);
+    } catch (error) {
+      Alert.alert('Search Failed', friendlyError(error));
+      setMultiResults([]);
+      setMultiNotFound([]);
+    } finally {
+      setMultiBusy(false);
+    }
+  };
 
   const pickRequest = async (group) => {
     setRequestBusy(true);
@@ -731,7 +868,15 @@ Server: ${apiBaseUrl}`, [
     }
     setRequestBusy(true);
     try {
-      await submitPartResponse(selectedRequest.request_group_key, requestRows.map((row) => ({ orderRequestId: row.orderRequestId, partNumber: row.partNumber, acceptedQty: numberValue(row.acceptedQty), remark: row.remark.trim() })));
+      await submitPartResponse(
+        selectedRequest.request_group_key,
+        requestRows.map((row) => ({
+          orderRequestId: row.orderRequestId,
+          partNumber: row.partNumber,
+          acceptedQty: numberValue(row.acceptedQty),
+          remark: row.remark.trim(),
+        }))
+      );
       Alert.alert('Submitted', 'Request response submitted successfully.');
       setScreen('notifications');
     } catch (error) {
@@ -745,49 +890,69 @@ Server: ${apiBaseUrl}`, [
     return <LoadingScreen label="Opening Sleeping Stock Mobile..." />;
   }
 
+  if (mandatoryUpdate) {
+    return (
+      <SafeAreaView style={styles.safeArea}>
+        <StatusBar barStyle="dark-content" backgroundColor="#ffffff" />
+        <MandatoryUpdateScreen versionInfo={mandatoryUpdate} currentVersionCode={CURRENT_VERSION_CODE} />
+      </SafeAreaView>
+    );
+  }
+
   const goBack = () => {
-    if (screen === 'scanner') setScreen(scannerTarget === 'pairing' ? 'pair' : scannerTarget === 'verification' ? 'verification' : 'search');
-    else if (screen === 'request') setScreen('notifications');
+    if (screen === 'scanner') {
+      setScreen(
+        scannerTarget === 'pairing'
+          ? 'pair'
+          : scannerTarget === 'verification'
+            ? 'verification'
+            : scannerTarget === 'multi-search'
+              ? 'multi-search'
+              : 'search'
+      );
+    } else if (screen === 'request') setScreen('notifications');
+    else if (screen === 'multi-search') setScreen('search');
     else setScreen('home');
   };
 
   return (
     <SafeAreaView style={styles.safeArea}>
       <StatusBar barStyle="dark-content" backgroundColor="#ffffff" />
-      {isOffline && <View style={styles.offline}><Text style={styles.offlineText}>Offline — uploads will sync automatically</Text></View>}
+      {isOffline && (
+        <View style={styles.offline}>
+          <Text style={styles.offlineText}>Offline — uploads will sync automatically</Text>
+        </View>
+      )}
+      {screen !== 'auto' && <SyncStatusBanner status={syncStatus} />}
+
       {screen === 'pair' && (
         <PairScreen
           mobileUserId={mobileUserId}
-          setMobileUserId={setMobileUserId}
           userName={userName}
           setUserName={setUserName}
           mobileNumber={mobileNumber}
           setMobileNumber={setMobileNumber}
-          pairingCode={pairingCode}
-          setPairingCode={setPairingCode}
           busy={pairingBusy}
           onScanQr={() => openScanner('pairing')}
         />
       )}
-      {screen === 'home' && <HomeScreen session={session} pendingCount={pendingCount} navigate={setScreen} logout={logout} />}
+      {screen === 'home' && (
+        <HomeScreen session={session} pendingCount={pendingCount} navigate={setScreen} logout={logout} />
+      )}
       {screen === 'auto' && (
         <AutoPerpetualScreen
           onBack={goBack}
           sessionId={autoSessionId}
           tasks={autoTasks}
+          localVerified={autoLocalVerified}
+          assignedCount={autoAssignedCount}
+          completedCount={autoCompletedCount}
           busy={autoBusy}
-          selected={autoSelected}
-          onSelect={selectAutoTask}
-          physicalQty={physicalQty}
-          setPhysicalQty={setPhysicalQty}
-          physicalLocation={physicalLocation}
-          setPhysicalLocation={setPhysicalLocation}
-          remark={verificationRemark}
-          setRemark={setVerificationRemark}
-          damageQty={autoDamageQty}
-          setDamageQty={setAutoDamageQty}
+          syncStatus={syncStatus}
           onRefresh={loadAutoTasks}
-          onSubmit={submitAutoVerification}
+          onSaveLocal={saveAutoLocal}
+          onSubmitVerified={submitAutoVerified}
+          submitting={autoSubmitting}
         />
       )}
       {screen === 'verification' && (
@@ -815,17 +980,30 @@ Server: ${apiBaseUrl}`, [
         />
       )}
       {screen === 'search' && (
-        <SearchScreen
+        <StockAvailabilityScreen
           onBack={goBack}
           input={searchInput}
           setInput={setSearchInput}
-          parts={searchParts}
-          removePart={(part) => setSearchParts((rows) => rows.filter((x) => x !== part))}
-          onAdd={addSearchInput}
+          onSearch={runPrefixSearch}
           onScan={() => openScanner('search')}
-          onSearch={runSearch}
+          onOpenMulti={() => setScreen('multi-search')}
           results={searchResults}
+          notFound={searchNotFound}
           busy={searchBusy}
+          agingThreshold={agingThreshold}
+          setAgingThreshold={setAgingThreshold}
+        />
+      )}
+      {screen === 'multi-search' && (
+        <MultiPartSearchScreen
+          onBack={goBack}
+          input={multiInput}
+          setInput={setMultiInput}
+          onSearch={runMultiSearch}
+          results={multiResults}
+          notFound={multiNotFound}
+          busy={multiBusy}
+          agingThreshold={agingThreshold}
         />
       )}
       {screen === 'notifications' && (
@@ -844,33 +1022,60 @@ Server: ${apiBaseUrl}`, [
           onBack={goBack}
           request={selectedRequest}
           rows={requestRows}
-          updateRow={(id, field, value) => setRequestRows((items) => items.map((x) => x.orderRequestId === id ? { ...x, [field]: value } : x))}
+          updateRow={(id, field, value) =>
+            setRequestRows((items) => items.map((x) => (x.orderRequestId === id ? { ...x, [field]: value } : x)))
+          }
           onSubmit={submitRequestResponse}
           busy={requestBusy}
         />
       )}
-      {screen === 'scanner' && (
-        scannerTarget === 'pairing' ? (
-          <PairingScannerScreen onBack={goBack} onBarcodeScanned={handlePairingQr} scanned={pairingScanned || pairingBusy} onScanAgain={() => setPairingScanned(false)} />
+      {screen === 'scanner' &&
+        (scannerTarget === 'pairing' ? (
+          <PairingScannerScreen
+            onBack={goBack}
+            onBarcodeScanned={handlePairingQr}
+            scanned={pairingScanned || pairingBusy}
+            onScanAgain={() => setPairingScanned(false)}
+          />
         ) : (
-          <ScannerScreen onBack={goBack} permission={permission} cameraRef={cameraRef} cameraLayout={cameraLayout} scanFrameLayout={scanFrameLayout} scanLine={scanLine} onScan={scanPartNumber} busy={ocrBusy} />
-        )
-      )}
+          <ScannerScreen
+            onBack={goBack}
+            permission={permission}
+            cameraRef={cameraRef}
+            cameraLayout={cameraLayout}
+            scanFrameLayout={scanFrameLayout}
+            scanLine={scanLine}
+            onScan={scanPartNumber}
+            busy={ocrBusy}
+          />
+        ))}
     </SafeAreaView>
   );
 }
 
 function PairScreen(props) {
   return (
-    <KeyboardAvoidingView style={styles.flex} behavior={Platform.OS === 'ios' ? 'padding' : 'height'} keyboardVerticalOffset={Platform.OS === 'ios' ? 0 : 18}>
+    <KeyboardAvoidingView
+      style={styles.flex}
+      behavior={Platform.OS === 'ios' ? 'padding' : 'height'}
+      keyboardVerticalOffset={Platform.OS === 'ios' ? 0 : 18}
+    >
       <ScrollView contentContainerStyle={styles.pairPage} keyboardShouldPersistTaps="handled" keyboardDismissMode="interactive">
-        <Image source={require("./assets/sleeping-stock-logo-transparent.png")} style={styles.brandLogo} resizeMode="contain" />
+        <Image source={require('./assets/sleeping-stock-logo-transparent.png')} style={styles.brandLogo} resizeMode="contain" />
         <Text style={styles.appTitle}>Sleeping Stock Mobile</Text>
         <Text style={styles.appSub}>PAIR THIS DEVICE</Text>
         <View style={styles.card}>
           <Field label="Your Name" value={props.userName} onChangeText={props.setUserName} />
-          <Field label="Mobile Number" value={props.mobileNumber} onChangeText={props.setMobileNumber} keyboardType="phone-pad" />
-          <Text style={styles.qrInfo}>The NMTS website QR contains a one-time pairing code and secure server URL. A new Mobile User ID is created after first pairing; Re-pair keeps the same ID.</Text>
+          <Field
+            label="Mobile Number"
+            value={props.mobileNumber}
+            onChangeText={props.setMobileNumber}
+            keyboardType="phone-pad"
+          />
+          <Text style={styles.qrInfo}>
+            The NMTS website QR contains a one-time pairing code and secure server URL. A new Mobile User ID is created after
+            first pairing; Re-pair keeps the same ID.
+          </Text>
           <PrimaryButton title="Scan NMTS Pairing QR" onPress={props.onScanQr} busy={props.busy} />
           {!!props.mobileUserId && <Text style={styles.detectedUser}>Detected User: {props.mobileUserId}</Text>}
         </View>
@@ -883,62 +1088,45 @@ function HomeScreen({ session, pendingCount, navigate, logout }) {
   return (
     <ScrollView contentContainerStyle={styles.homePage}>
       <View style={styles.homeHeader}>
-        <View><Text style={styles.hello}>WELCOME</Text><Text style={styles.homeName}>{session?.name || 'Mobile User'}</Text></View>
-        <TouchableOpacity onPress={logout}><Text style={styles.logout}>Logout</Text></TouchableOpacity>
+        <View>
+          <Text style={styles.hello}>WELCOME</Text>
+          <Text style={styles.homeName}>{session?.name || 'Mobile User'}</Text>
+        </View>
+        <TouchableOpacity onPress={logout}>
+          <Text style={styles.logout}>Logout</Text>
+        </TouchableOpacity>
       </View>
       <View style={styles.branchCard}>
         <Text style={styles.branchTitle}>{session?.branch || 'Paired Branch'}</Text>
-        <Text style={styles.branchSub}>{session?.dealerName || ''} {session?.brandName ? `• ${session.brandName}` : ''}</Text>
+        <Text style={styles.branchSub}>
+          {session?.dealerName || ''} {session?.brandName ? `• ${session.brandName}` : ''}
+        </Text>
       </View>
       <MenuButton icon="🔔" title="Notifications" subtitle="Pick and process parts requests" onPress={() => navigate('notifications')} />
       <MenuButton icon="✓" title="Physical Perpetual" subtitle="Manual / scan stock verification (MOPS)" onPress={() => navigate('verification')} />
-      <MenuButton icon="⚡" title="Auto Perpetual" subtitle="Today&apos;s assigned verification tasks (AOPS)" onPress={() => navigate('auto')} />
-      <MenuButton icon="⌕" title="Stock Availability" subtitle="Search single or multiple part numbers" onPress={() => navigate('search')} />
-      {pendingCount > 0 && <View style={styles.pendingCard}><Text style={styles.pendingText}>{pendingCount} verification record(s) pending upload</Text><TouchableOpacity onPress={() => syncQueue()}><Text style={styles.pendingAction}>Upload Now</Text></TouchableOpacity></View>}
+      <MenuButton icon="⚡" title="Auto Perpetual" subtitle="Today's assigned verification tasks (AOPS)" onPress={() => navigate('auto')} />
+      <MenuButton icon="⌕" title="Stock Availability" subtitle="Product Hub style search + multiple parts" onPress={() => navigate('search')} />
+      {pendingCount > 0 && (
+        <View style={styles.pendingCard}>
+          <Text style={styles.pendingText}>{pendingCount} verification record(s) pending upload</Text>
+          <TouchableOpacity onPress={() => syncQueue()}>
+            <Text style={styles.pendingAction}>Upload Now</Text>
+          </TouchableOpacity>
+        </View>
+      )}
     </ScrollView>
   );
 }
 
-function AutoPerpetualScreen({ onBack, sessionId, tasks, busy, selected, onSelect, physicalQty, setPhysicalQty, physicalLocation, setPhysicalLocation, remark, setRemark, damageQty, setDamageQty, onRefresh, onSubmit }) {
-  const diff = selected ? differenceFor(selected.systemQty, physicalQty, selected.unitValue) : null;
-  return (
-    <KeyboardAvoidingView style={styles.flex} behavior={Platform.OS === 'ios' ? 'padding' : 'height'} keyboardVerticalOffset={Platform.OS === 'ios' ? 0 : 18}>
-      <Header title="Auto Perpetual" onBack={onBack} action="Refresh" onAction={onRefresh} />
-      <ScrollView style={styles.flex} contentContainerStyle={[styles.topContent, { paddingBottom: 220 }]} keyboardShouldPersistTaps="handled">
-        <Text style={styles.sectionLabel}>TODAY&apos;S SESSION</Text>
-        <View style={styles.detailCard}><Text style={styles.partBig}>{sessionId || 'Loading session…'}</Text><Text style={styles.partName}>Pending tasks: {tasks.length}</Text></View>
-        <Text style={styles.sectionLabel}>ASSIGNED PARTS ({tasks.length})</Text>
-        {tasks.length === 0 ? <Empty text="No Auto Perpetual tasks for today." /> : tasks.map((t) => (
-          <TouchableOpacity key={`${t.part_number}-${t.id || ''}`} style={[styles.verificationRow, selected?.part_number === t.part_number && { borderColor: BLUE, borderWidth: 2 }]} onPress={() => onSelect(t)}>
-            <View style={{ flex: 1 }}><Text style={styles.rowPartNo}>{t.part_number}</Text><Text style={styles.rowPartName}>{t.part_name || '-'}</Text><Text style={styles.rowMeta}>LOC: {t.loc || '-'} · Sys: {t.system_qty ?? '-'}{t.coverage_kind === 'recheck' ? ' · RECHECK' : ''}</Text></View>
-          </TouchableOpacity>
-        ))}
-        {selected && (
-          <View style={styles.detailCard}>
-            <Text style={styles.partBig}>{selected.partNumber}</Text>
-            <Text style={styles.partName}>{selected.partName}</Text>
-            <InfoGrid rows={[['System Qty', selected.systemQty], ['LOC', selected.systemLocation], ['Shortage', diff?.shortageQty ?? 0], ['Excess', diff?.excessQty ?? 0]]} />
-            <View style={styles.twoInputs}>
-              <TextInput style={[styles.bottomInput, styles.halfInput]} value={physicalQty} onChangeText={(v) => setPhysicalQty(v.replace(/[^0-9.]/g, ''))} placeholder="Physical Qty" keyboardType="decimal-pad" placeholderTextColor="#8793a6" />
-              <TextInput style={[styles.bottomInput, styles.halfInput]} value={damageQty} onChangeText={(v) => setDamageQty(v.replace(/[^0-9.]/g, ''))} placeholder="Damage Qty" keyboardType="decimal-pad" placeholderTextColor="#8793a6" />
-            </View>
-            <TextInput style={styles.bottomInput} value={physicalLocation} onChangeText={setPhysicalLocation} placeholder="Physical LOC" autoCapitalize="characters" placeholderTextColor="#8793a6" />
-            <TextInput style={styles.bottomInput} value={remark} onChangeText={setRemark} placeholder="Remark (optional)" placeholderTextColor="#8793a6" />
-            {diff && <StatusPill value={diff.status} />}
-            <PrimaryButton title="Submit Verification" onPress={onSubmit} busy={busy} />
-          </View>
-        )}
-      </ScrollView>
-    </KeyboardAvoidingView>
-  );
-}
-
 function VerificationScreen(props) {
-  const totals = props.list.reduce((a, x) => ({
-    matched: a.matched + (x.status === 'MATCHED' ? 1 : 0),
-    shortage: a.shortage + (x.status === 'SHORTAGE' ? 1 : 0),
-    excess: a.excess + (x.status === 'EXCESS' ? 1 : 0),
-  }), { matched: 0, shortage: 0, excess: 0 });
+  const totals = props.list.reduce(
+    (a, x) => ({
+      matched: a.matched + (x.status === 'MATCHED' ? 1 : 0),
+      shortage: a.shortage + (x.status === 'SHORTAGE' ? 1 : 0),
+      excess: a.excess + (x.status === 'EXCESS' ? 1 : 0),
+    }),
+    { matched: 0, shortage: 0, excess: 0 }
+  );
   const diff = props.selectedPart ? differenceFor(props.selectedPart.systemQty, props.physicalQty, props.selectedPart.unitValue) : null;
   return (
     <KeyboardAvoidingView
@@ -947,9 +1135,18 @@ function VerificationScreen(props) {
       keyboardVerticalOffset={Platform.OS === 'ios' ? 0 : 18}
     >
       <Header title="Stock Verification" onBack={props.onBack} />
-      <ScrollView style={styles.flex} contentContainerStyle={[styles.topContent, { paddingBottom: 220 }]} keyboardShouldPersistTaps="handled" keyboardDismissMode="interactive">
+      <ScrollView
+        style={styles.flex}
+        contentContainerStyle={[styles.topContent, { paddingBottom: 220 }]}
+        keyboardShouldPersistTaps="handled"
+        keyboardDismissMode="interactive"
+      >
         <Text style={styles.sectionLabel}>ADDED PARTS ({props.list.length})</Text>
-        {props.list.length === 0 ? <Empty text="Added parts will appear here." /> : props.list.map((row) => <VerificationRow key={row.id} row={row} onDelete={() => props.removeRow(row.id)} />)}
+        {props.list.length === 0 ? (
+          <Empty text="Added parts will appear here." />
+        ) : (
+          props.list.map((row) => <VerificationRow key={row.id} row={row} onDelete={() => props.removeRow(row.id)} />)
+        )}
         <View style={styles.summaryRow}>
           <MiniStat label="Total" value={props.list.length} />
           <MiniStat label="Matched" value={totals.matched} />
@@ -970,60 +1167,76 @@ function VerificationScreen(props) {
             ) : (
               <Text style={styles.partName}>{props.selectedPart.partName}</Text>
             )}
-            <InfoGrid rows={[
-              ['System Qty', props.selectedPart.systemQty], ['System LOC', props.selectedPart.systemLocation],
-              ['Available Qty', props.selectedPart.availableQty], ['Unit Value', `₹${props.selectedPart.unitValue.toLocaleString('en-IN')}`],
-              ['Shortage Qty', diff?.shortageQty ?? 0], ['Excess Qty', diff?.excessQty ?? 0],
-            ]} />
+            <InfoGrid
+              rows={[
+                ['System Qty', props.selectedPart.systemQty],
+                ['System LOC', props.selectedPart.systemLocation],
+                ['Available Qty', props.selectedPart.availableQty],
+                ['Unit Value', `₹${props.selectedPart.unitValue.toLocaleString('en-IN')}`],
+                ['Shortage Qty', diff?.shortageQty ?? 0],
+                ['Excess Qty', diff?.excessQty ?? 0],
+              ]}
+            />
             {diff && <StatusPill value={diff.status} />}
           </View>
         )}
       </ScrollView>
       <View style={styles.bottomPanel}>
-          <View style={styles.inlineInputRow}>
-            <TextInput style={styles.bottomInput} value={props.input} onChangeText={(v) => props.setInput(cleanPartNumber(v))} placeholder="Enter Part Number" placeholderTextColor="#8793a6" autoCapitalize="characters" />
-            <SquareButton title="⌕" onPress={props.onLookup} />
-            <SquareButton title="▣" onPress={props.onScan} />
-          </View>
-          {props.selectedPart && <>
+        <View style={styles.inlineInputRow}>
+          <TextInput
+            style={styles.bottomInput}
+            value={props.input}
+            onChangeText={(v) => props.setInput(cleanPartNumber(v))}
+            placeholder="Enter Part Number"
+            placeholderTextColor="#8793a6"
+            autoCapitalize="characters"
+          />
+          <SquareButton title="⌕" onPress={props.onLookup} />
+          <SquareButton title="▣" onPress={props.onScan} />
+        </View>
+        {props.selectedPart && (
+          <>
             <View style={styles.twoInputs}>
-              <TextInput style={[styles.bottomInput, styles.halfInput]} value={props.physicalQty} onChangeText={(v) => props.setPhysicalQty(v.replace(/[^0-9.]/g, ''))} placeholder="Physical Qty" keyboardType="decimal-pad" placeholderTextColor="#8793a6" />
-              <TextInput style={[styles.bottomInput, styles.halfInput]} value={props.physicalLocation} onChangeText={props.setPhysicalLocation} placeholder="Physical LOC" autoCapitalize="characters" placeholderTextColor="#8793a6" />
+              <TextInput
+                style={[styles.bottomInput, styles.halfInput]}
+                value={props.physicalQty}
+                onChangeText={(v) => props.setPhysicalQty(v.replace(/[^0-9.]/g, ''))}
+                placeholder="Physical Qty"
+                keyboardType="decimal-pad"
+                placeholderTextColor="#8793a6"
+              />
+              <TextInput
+                style={[styles.bottomInput, styles.halfInput]}
+                value={props.physicalLocation}
+                onChangeText={props.setPhysicalLocation}
+                placeholder="Physical LOC"
+                autoCapitalize="characters"
+                placeholderTextColor="#8793a6"
+              />
             </View>
-            <TextInput style={styles.bottomInput} value={props.remark} onChangeText={props.setRemark} placeholder="Remark (optional)" placeholderTextColor="#8793a6" />
-            <TextInput style={styles.bottomInput} value={props.damageQty} onChangeText={(v) => props.setDamageQty(v.replace(/[^0-9.]/g, ''))} placeholder="Damage Qty (optional)" keyboardType="decimal-pad" placeholderTextColor="#8793a6" />
-          </>}
-          <View style={styles.actionRow}>
-            <SecondaryButton title="Add to List" onPress={props.onAdd} disabled={!props.selectedPart} />
-            <PrimaryButton title={`Submit All (${props.list.length})`} onPress={props.onSubmit} disabled={!props.list.length} busy={props.busy} compact />
-          </View>
+            <TextInput
+              style={styles.bottomInput}
+              value={props.remark}
+              onChangeText={props.setRemark}
+              placeholder="Remark (optional)"
+              placeholderTextColor="#8793a6"
+            />
+            <TextInput
+              style={styles.bottomInput}
+              value={props.damageQty}
+              onChangeText={(v) => props.setDamageQty(v.replace(/[^0-9.]/g, ''))}
+              placeholder="Damage Qty (optional)"
+              keyboardType="decimal-pad"
+              placeholderTextColor="#8793a6"
+            />
+          </>
+        )}
+        <View style={styles.actionRow}>
+          <SecondaryButton title="Add to List" onPress={props.onAdd} disabled={!props.selectedPart} />
+          <PrimaryButton title={`Submit All (${props.list.length})`} onPress={props.onSubmit} disabled={!props.list.length} busy={props.busy} compact />
         </View>
+      </View>
     </KeyboardAvoidingView>
-  );
-}
-
-function SearchScreen(props) {
-  return (
-    <View style={styles.flex}>
-      <Header title="Stock Availability" onBack={props.onBack} />
-      <ScrollView style={styles.flex} contentContainerStyle={styles.topContent} keyboardShouldPersistTaps="handled">
-        <Text style={styles.sectionLabel}>SEARCH RESULTS ({props.results.length})</Text>
-        {props.results.length === 0 ? <Empty text="Search results will appear here." /> : props.results.map((row) => <StockRow key={row.partNumber} row={row} />)}
-        {props.parts.length > 0 && <View style={styles.chipWrap}>{props.parts.map((part) => <TouchableOpacity key={part} style={styles.chip} onPress={() => props.removePart(part)}><Text style={styles.chipText}>{part} ×</Text></TouchableOpacity>)}</View>}
-      </ScrollView>
-      <KeyboardAvoidingView behavior={Platform.OS === 'ios' ? 'padding' : 'height'} keyboardVerticalOffset={Platform.OS === 'ios' ? 0 : 18}>
-        <View style={styles.bottomPanel}>
-          <View style={styles.inlineInputRow}>
-            <TextInput style={[styles.bottomInput, { minHeight: 48 }]} value={props.input} onChangeText={props.setInput} placeholder="Enter / Paste Part Numbers" placeholderTextColor="#8793a6" autoCapitalize="characters" multiline />
-            <SquareButton title="▣" onPress={props.onScan} />
-          </View>
-          <View style={styles.actionRow}>
-            <SecondaryButton title="Add to List" onPress={props.onAdd} />
-            <PrimaryButton title="Search All" onPress={props.onSearch} busy={props.busy} compact />
-          </View>
-        </View>
-      </KeyboardAvoidingView>
-    </View>
   );
 }
 
@@ -1039,12 +1252,21 @@ function NotificationsScreen({ onBack, rows, busy, refresh, openRequest, pickReq
         ListEmptyComponent={!busy ? <Empty text="No pending request for your branch." /> : null}
         renderItem={({ item }) => (
           <TouchableOpacity style={styles.requestCard} onPress={() => openRequest(item)}>
-            <View style={styles.rowBetween}><Text style={styles.requestNo}>{item.request_number}</Text><Text style={styles.newBadge}>NEW</Text></View>
+            <View style={styles.rowBetween}>
+              <Text style={styles.requestNo}>{item.request_number}</Text>
+              <Text style={styles.newBadge}>NEW</Text>
+            </View>
             <Text style={styles.requestFrom}>From: {item.requesting_branch || item.requesting_dealer || '-'}</Text>
-            <Text style={styles.requestMeta}>Items: {item.total_items || 0}    Qty: {item.total_quantity || 0}</Text>
+            <Text style={styles.requestMeta}>
+              Items: {item.total_items || 0}    Qty: {item.total_quantity || 0}
+            </Text>
             <View style={styles.requestActions}>
-              <TouchableOpacity style={styles.snoozeButton} onPress={() => snoozeRequest(item)}><Text style={styles.snoozeText}>Snooze</Text></TouchableOpacity>
-              <TouchableOpacity style={styles.pickButton} onPress={() => pickRequest(item)}><Text style={styles.pickText}>Pick Request</Text></TouchableOpacity>
+              <TouchableOpacity style={styles.snoozeButton} onPress={() => snoozeRequest(item)}>
+                <Text style={styles.snoozeText}>Snooze</Text>
+              </TouchableOpacity>
+              <TouchableOpacity style={styles.pickButton} onPress={() => pickRequest(item)}>
+                <Text style={styles.pickText}>Pick Request</Text>
+              </TouchableOpacity>
             </View>
           </TouchableOpacity>
         )}
@@ -1057,26 +1279,57 @@ function RequestScreen({ onBack, request, rows, updateRow, onSubmit, busy }) {
   return (
     <View style={styles.flex}>
       <Header title="Request Parts" onBack={onBack} />
-      <View style={styles.requestHeader}><Text style={styles.requestHeaderNo}>{request?.request_number}</Text><Text style={styles.requestHeaderSub}>{request?.requesting_branch || request?.requesting_dealer || '-'}</Text></View>
+      <View style={styles.requestHeader}>
+        <Text style={styles.requestHeaderNo}>{request?.request_number}</Text>
+        <Text style={styles.requestHeaderSub}>{request?.requesting_branch || request?.requesting_dealer || '-'}</Text>
+      </View>
       <ScrollView style={styles.flex} contentContainerStyle={styles.requestPartsContent} keyboardShouldPersistTaps="handled">
-        <View style={styles.tableHeader}><Text style={[styles.th, { flex: 2 }]}>Part Number</Text><Text style={styles.th}>Req</Text><Text style={styles.th}>Avail</Text><Text style={styles.th}>Accept</Text><Text style={styles.th}>LOC</Text></View>
+        <View style={styles.tableHeader}>
+          <Text style={[styles.th, { flex: 2 }]}>Part Number</Text>
+          <Text style={styles.th}>Req</Text>
+          <Text style={styles.th}>Avail</Text>
+          <Text style={styles.th}>Accept</Text>
+          <Text style={styles.th}>LOC</Text>
+        </View>
         {rows.map((row) => {
           const accepted = numberValue(row.acceptedQty);
           const status = accepted === row.requestedQty ? 'ACCEPTED' : accepted === 0 ? 'REJECTED' : 'PARTIAL';
-          return <View key={row.orderRequestId} style={styles.requestPartRow}>
-            <View style={styles.requestMainLine}>
-              <Text style={[styles.tdStrong, { flex: 2 }]}>{row.partNumber}</Text>
-              <Text style={styles.td}>{row.requestedQty}</Text>
-              <Text style={styles.td}>{row.availableQty}</Text>
-              <TextInput style={styles.qtyInput} value={row.acceptedQty} onChangeText={(v) => updateRow(row.orderRequestId, 'acceptedQty', v.replace(/[^0-9.]/g, ''))} keyboardType="decimal-pad" />
-              <Text style={styles.td}>{row.loc}</Text>
+          return (
+            <View key={row.orderRequestId} style={styles.requestPartRow}>
+              <View style={styles.requestMainLine}>
+                <Text style={[styles.tdStrong, { flex: 2 }]}>{row.partNumber}</Text>
+                <Text style={styles.td}>{row.requestedQty}</Text>
+                <Text style={styles.td}>{row.availableQty}</Text>
+                <TextInput
+                  style={styles.qtyInput}
+                  value={row.acceptedQty}
+                  onChangeText={(v) => updateRow(row.orderRequestId, 'acceptedQty', v.replace(/[^0-9.]/g, ''))}
+                  keyboardType="decimal-pad"
+                />
+                <Text style={styles.td}>{row.loc}</Text>
+              </View>
+              <View style={styles.requestExtra}>
+                <Text style={styles.requestExtraText}>
+                  {row.partName} • Purchase {row.purchaseAging} • Sales {row.salesAging}
+                </Text>
+                <StatusPill value={status} />
+              </View>
+              {status !== 'ACCEPTED' && (
+                <TextInput
+                  style={styles.remarkInput}
+                  value={row.remark}
+                  onChangeText={(v) => updateRow(row.orderRequestId, 'remark', v)}
+                  placeholder="Remark required"
+                  placeholderTextColor="#8793a6"
+                />
+              )}
             </View>
-            <View style={styles.requestExtra}><Text style={styles.requestExtraText}>{row.partName} • Purchase {row.purchaseAging} • Sales {row.salesAging}</Text><StatusPill value={status} /></View>
-            {status !== 'ACCEPTED' && <TextInput style={styles.remarkInput} value={row.remark} onChangeText={(v) => updateRow(row.orderRequestId, 'remark', v)} placeholder="Remark required" placeholderTextColor="#8793a6" />}
-          </View>;
+          );
         })}
       </ScrollView>
-      <View style={styles.submitBar}><PrimaryButton title="Submit Request Response" onPress={onSubmit} busy={busy} /></View>
+      <View style={styles.submitBar}>
+        <PrimaryButton title="Submit Request Response" onPress={onSubmit} busy={busy} />
+      </View>
     </View>
   );
 }
@@ -1084,12 +1337,28 @@ function RequestScreen({ onBack, request, rows, updateRow, onSubmit, busy }) {
 function PairingScannerScreen({ onBack, onBarcodeScanned, scanned, onScanAgain }) {
   return (
     <View style={styles.scannerPage}>
-      <CameraView style={StyleSheet.absoluteFill} facing="back" barcodeScannerSettings={{ barcodeTypes: ['qr'] }} onBarcodeScanned={scanned ? undefined : onBarcodeScanned} />
+      <CameraView
+        style={StyleSheet.absoluteFill}
+        facing="back"
+        barcodeScannerSettings={{ barcodeTypes: ['qr'] }}
+        onBarcodeScanned={scanned ? undefined : onBarcodeScanned}
+      />
       <View style={styles.scannerShade} />
-      <TouchableOpacity style={styles.scannerClose} onPress={onBack}><Text style={styles.scannerCloseText}>×</Text></TouchableOpacity>
-      <View style={styles.qrFrame}><View style={styles.qrCornerTL} /><View style={styles.qrCornerTR} /><View style={styles.qrCornerBL} /><View style={styles.qrCornerBR} /></View>
+      <TouchableOpacity style={styles.scannerClose} onPress={onBack}>
+        <Text style={styles.scannerCloseText}>×</Text>
+      </TouchableOpacity>
+      <View style={styles.qrFrame}>
+        <View style={styles.qrCornerTL} />
+        <View style={styles.qrCornerTR} />
+        <View style={styles.qrCornerBL} />
+        <View style={styles.qrCornerBR} />
+      </View>
       <Text style={styles.scanHelp}>Scan the pairing QR generated from the NMTS website</Text>
-      {scanned && <View style={styles.scannerBottomBar}><SecondaryButton title="Scan Again" onPress={onScanAgain} /></View>}
+      {scanned && (
+        <View style={styles.scannerBottomBar}>
+          <SecondaryButton title="Scan Again" onPress={onScanAgain} />
+        </View>
+      )}
     </View>
   );
 }
@@ -1097,11 +1366,23 @@ function PairingScannerScreen({ onBack, onBarcodeScanned, scanned, onScanAgain }
 function ScannerScreen({ onBack, cameraRef, cameraLayout, scanFrameLayout, scanLine, onScan, busy }) {
   const translateY = scanLine.interpolate({ inputRange: [0, 1], outputRange: [0, 94] });
   return (
-    <View style={styles.scannerPage} onLayout={(e) => { cameraLayout.current = e.nativeEvent.layout; }}>
+    <View
+      style={styles.scannerPage}
+      onLayout={(e) => {
+        cameraLayout.current = e.nativeEvent.layout;
+      }}
+    >
       <CameraView ref={cameraRef} style={StyleSheet.absoluteFill} facing="back" mode="picture" />
       <View style={styles.scannerShade} />
-      <TouchableOpacity style={styles.scannerClose} onPress={onBack}><Text style={styles.scannerCloseText}>×</Text></TouchableOpacity>
-      <View style={styles.scanFrame} onLayout={(e) => { scanFrameLayout.current = e.nativeEvent.layout; }}>
+      <TouchableOpacity style={styles.scannerClose} onPress={onBack}>
+        <Text style={styles.scannerCloseText}>×</Text>
+      </TouchableOpacity>
+      <View
+        style={styles.scanFrame}
+        onLayout={(e) => {
+          scanFrameLayout.current = e.nativeEvent.layout;
+        }}
+      >
         <Animated.View style={[styles.scanBeam, { transform: [{ translateY }] }]} />
       </View>
       <Text style={styles.scanHelp}>Keep only the part number inside this box</Text>
@@ -1115,36 +1396,251 @@ function ScannerScreen({ onBack, cameraRef, cameraLayout, scanFrameLayout, scanL
   );
 }
 
-function Header({ title, onBack, action, onAction }) {
-  return <View style={styles.header}><TouchableOpacity onPress={onBack}><Text style={styles.back}>‹</Text></TouchableOpacity><Text style={styles.headerTitle}>{title}</Text>{action ? <TouchableOpacity onPress={onAction}><Text style={styles.headerAction}>{action}</Text></TouchableOpacity> : <View style={{ width: 42 }} />}</View>;
+function MenuButton({ icon, title, subtitle, onPress }) {
+  return (
+    <TouchableOpacity style={styles.menuButton} onPress={onPress}>
+      <View style={styles.menuIcon}>
+        <Text style={{ fontSize: 22 }}>{icon}</Text>
+      </View>
+      <View style={{ flex: 1 }}>
+        <Text style={styles.menuTitle}>{title}</Text>
+        <Text style={styles.menuSub}>{subtitle}</Text>
+      </View>
+      <Text style={styles.chevron}>›</Text>
+    </TouchableOpacity>
+  );
 }
-function Field({ label, ...props }) { return <View style={{ marginBottom: 14 }}><Text style={styles.label}>{label}</Text><TextInput style={styles.input} placeholderTextColor="#8793a6" {...props} /></View>; }
-function PrimaryButton({ title, onPress, busy, disabled, compact }) { return <TouchableOpacity style={[styles.primaryButton, compact && { flex: 1 }, disabled && styles.disabled]} onPress={onPress} disabled={busy || disabled}>{busy ? <ActivityIndicator color="#fff" /> : <Text style={styles.primaryText}>{title}</Text>}</TouchableOpacity>; }
-function SecondaryButton({ title, onPress, disabled }) { return <TouchableOpacity style={[styles.secondaryButton, disabled && styles.disabled]} onPress={onPress} disabled={disabled}><Text style={styles.secondaryText}>{title}</Text></TouchableOpacity>; }
-function SquareButton({ title, onPress }) { return <TouchableOpacity style={styles.squareButton} onPress={onPress}><Text style={styles.squareButtonText}>{title}</Text></TouchableOpacity>; }
-function MenuButton({ icon, title, subtitle, onPress }) { return <TouchableOpacity style={styles.menuButton} onPress={onPress}><View style={styles.menuIcon}><Text style={{ fontSize: 22 }}>{icon}</Text></View><View style={{ flex: 1 }}><Text style={styles.menuTitle}>{title}</Text><Text style={styles.menuSub}>{subtitle}</Text></View><Text style={styles.chevron}>›</Text></TouchableOpacity>; }
-function LoadingScreen({ label }) { return <SafeAreaView style={[styles.safeArea, styles.center]}><ActivityIndicator size="large" color={BLUE} /><Text style={{ marginTop: 12, color: MUTED }}>{label}</Text></SafeAreaView>; }
-function Empty({ text }) { return <View style={styles.empty}><Text style={styles.emptyText}>{text}</Text></View>; }
-function MiniStat({ label, value }) { return <View style={styles.miniStat}><Text style={styles.miniValue}>{value}</Text><Text style={styles.miniLabel}>{label}</Text></View>; }
-function StatusPill({ value }) { const color = value === 'MATCHED' || value === 'ACCEPTED' ? SUCCESS : value === 'SHORTAGE' || value === 'PARTIAL' ? WARNING : DANGER; return <View style={[styles.statusPill, { backgroundColor: `${color}18` }]}><Text style={[styles.statusPillText, { color }]}>{value}</Text></View>; }
-function InfoGrid({ rows }) { return <View style={styles.infoGrid}>{rows.map(([label, value]) => <View key={label} style={styles.infoCell}><Text style={styles.infoLabel}>{label}</Text><Text style={styles.infoValue}>{value}</Text></View>)}</View>; }
-function VerificationRow({ row, onDelete }) { return <View style={styles.verificationRow}><View style={{ flex: 1 }}><Text style={styles.rowPartNo}>{row.partNumber}</Text><Text style={styles.rowPartName}>{row.partName}</Text><Text style={styles.rowMeta}>Sys: {row.systemQty}   Phys: {row.physicalQty}   LOC: {row.physicalLocation}</Text></View><View style={{ alignItems: 'flex-end' }}><StatusPill value={row.status} /><TouchableOpacity onPress={onDelete}><Text style={styles.delete}>Delete</Text></TouchableOpacity></View></View>; }
-function StockRow({ row }) { return <View style={styles.stockRow}><View style={{ flex: 1 }}><Text style={styles.rowPartNo}>{row.partNumber}</Text><Text style={styles.rowPartName}>{row.partName}</Text></View><View style={styles.stockRight}><Text style={styles.stockQty}>{row.availableQty}</Text><Text style={styles.stockLoc}>{row.systemLocation}</Text><Text style={styles.stockValue}>₹{row.unitValue.toLocaleString('en-IN')}</Text></View></View>; }
+function LoadingScreen({ label }) {
+  return (
+    <SafeAreaView style={[styles.safeArea, styles.center]}>
+      <ActivityIndicator size="large" color={BLUE} />
+      <Text style={{ marginTop: 12, color: MUTED }}>{label}</Text>
+    </SafeAreaView>
+  );
+}
+function MiniStat({ label, value }) {
+  return (
+    <View style={styles.miniStat}>
+      <Text style={styles.miniValue}>{value}</Text>
+      <Text style={styles.miniLabel}>{label}</Text>
+    </View>
+  );
+}
+function InfoGrid({ rows }) {
+  return (
+    <View style={styles.infoGrid}>
+      {rows.map(([label, value]) => (
+        <View key={label} style={styles.infoCell}>
+          <Text style={styles.infoLabel}>{label}</Text>
+          <Text style={styles.infoValue}>{value}</Text>
+        </View>
+      ))}
+    </View>
+  );
+}
+function VerificationRow({ row, onDelete }) {
+  return (
+    <View style={styles.verificationRow}>
+      <View style={{ flex: 1 }}>
+        <Text style={styles.rowPartNo}>{row.partNumber}</Text>
+        <Text style={styles.rowPartName}>{row.partName}</Text>
+        <Text style={styles.rowMeta}>
+          Sys: {row.systemQty}   Phys: {row.physicalQty}   LOC: {row.physicalLocation}
+          {row.damageQty ? `   Dmg: ${row.damageQty}` : ''}
+        </Text>
+      </View>
+      <View style={{ alignItems: 'flex-end' }}>
+        <StatusPill value={row.status} />
+        <TouchableOpacity onPress={onDelete}>
+          <Text style={styles.delete}>Delete</Text>
+        </TouchableOpacity>
+      </View>
+    </View>
+  );
+}
 
 const styles = StyleSheet.create({
-  flex: { flex: 1 }, safeArea: { flex: 1, backgroundColor: BG }, center: { alignItems: 'center', justifyContent: 'center' },
-  offline: { backgroundColor: '#fff2c7', paddingVertical: 7, alignItems: 'center' }, offlineText: { color: '#7b5b00', fontSize: 12, fontWeight: '700' },
-  pairPage: { flexGrow: 1, justifyContent: 'center', padding: 24, paddingBottom: 56 }, qrInfo: { color: MUTED, fontSize: 12, lineHeight: 18, marginBottom: 16 }, detectedUser: { marginTop: 12, color: SUCCESS, fontSize: 12, fontWeight: '800', textAlign: 'center' }, brandLogo: { alignSelf: 'center', width: 190, height: 190 }, appTitle: { marginTop: 16, textAlign: 'center', color: DARK, fontSize: 24, fontWeight: '900' }, appSub: { marginTop: 4, marginBottom: 22, textAlign: 'center', color: MUTED, fontSize: 11, fontWeight: '800', letterSpacing: 1.4 },
-  card: { backgroundColor: '#fff', padding: 18, borderRadius: 20, borderWidth: 1, borderColor: BORDER }, label: { marginBottom: 7, color: DARK, fontSize: 12, fontWeight: '800' }, input: { minHeight: 50, borderWidth: 1, borderColor: BORDER, borderRadius: 13, paddingHorizontal: 14, backgroundColor: '#fbfcff', color: DARK },
-  primaryButton: { minHeight: 50, paddingHorizontal: 18, borderRadius: 13, backgroundColor: BLUE, alignItems: 'center', justifyContent: 'center' }, primaryText: { color: '#fff', fontWeight: '900' }, secondaryButton: { flex: 1, minHeight: 50, borderRadius: 13, borderWidth: 1, borderColor: BLUE, alignItems: 'center', justifyContent: 'center', marginRight: 10 }, secondaryText: { color: BLUE, fontWeight: '900' }, disabled: { opacity: 0.45 },
-  homePage: { padding: 20, paddingBottom: 50 }, homeHeader: { flexDirection: 'row', justifyContent: 'space-between', alignItems: 'center' }, hello: { color: MUTED, fontSize: 11, fontWeight: '800' }, homeName: { marginTop: 3, color: DARK, fontSize: 24, fontWeight: '900' }, logout: { color: DANGER, fontWeight: '800' }, branchCard: { marginTop: 20, marginBottom: 22, padding: 18, backgroundColor: BLUE, borderRadius: 20 }, branchTitle: { color: '#fff', fontSize: 18, fontWeight: '900' }, branchSub: { marginTop: 5, color: '#dbe7ff', fontSize: 12 }, menuButton: { minHeight: 82, marginBottom: 13, padding: 15, backgroundColor: '#fff', borderWidth: 1, borderColor: BORDER, borderRadius: 18, flexDirection: 'row', alignItems: 'center' }, menuIcon: { width: 48, height: 48, borderRadius: 15, backgroundColor: '#edf3ff', alignItems: 'center', justifyContent: 'center', marginRight: 13 }, menuTitle: { color: DARK, fontSize: 16, fontWeight: '900' }, menuSub: { marginTop: 4, color: MUTED, fontSize: 11 }, chevron: { color: BLUE, fontSize: 28 }, pendingCard: { marginTop: 10, padding: 14, backgroundColor: '#fff7e6', borderRadius: 14, flexDirection: 'row', justifyContent: 'space-between' }, pendingText: { color: '#865b00', flex: 1 }, pendingAction: { color: BLUE, fontWeight: '900' },
-  header: { height: 58, paddingHorizontal: 16, backgroundColor: '#fff', borderBottomWidth: 1, borderBottomColor: BORDER, flexDirection: 'row', alignItems: 'center', justifyContent: 'space-between' }, back: { color: DARK, fontSize: 38, lineHeight: 40 }, headerTitle: { color: DARK, fontSize: 17, fontWeight: '900' }, headerAction: { color: BLUE, fontSize: 12, fontWeight: '800' },
-  topContent: { padding: 14, paddingBottom: 20 }, sectionLabel: { marginBottom: 10, color: DARK, fontSize: 11, fontWeight: '900' }, empty: { padding: 24, backgroundColor: '#fff', borderWidth: 1, borderColor: BORDER, borderRadius: 16, alignItems: 'center' }, emptyText: { color: MUTED },
-  verificationRow: { marginBottom: 10, padding: 14, backgroundColor: '#fff', borderWidth: 1, borderColor: BORDER, borderRadius: 15, flexDirection: 'row' }, rowPartNo: { color: DARK, fontSize: 14, fontWeight: '900' }, rowPartName: { marginTop: 3, color: MUTED, fontSize: 11 }, rowMeta: { marginTop: 7, color: '#4b5563', fontSize: 11 }, delete: { marginTop: 10, color: DANGER, fontSize: 11, fontWeight: '800' }, statusPill: { alignSelf: 'flex-start', paddingHorizontal: 8, paddingVertical: 5, borderRadius: 8 }, statusPillText: { fontSize: 9, fontWeight: '900' },
-  summaryRow: { marginTop: 4, marginBottom: 14, flexDirection: 'row' }, miniStat: { flex: 1, marginRight: 6, paddingVertical: 10, backgroundColor: '#fff', borderWidth: 1, borderColor: BORDER, borderRadius: 12, alignItems: 'center' }, miniValue: { color: BLUE, fontSize: 17, fontWeight: '900' }, miniLabel: { marginTop: 3, color: MUTED, fontSize: 9 }, detailCard: { padding: 16, backgroundColor: '#fff', borderWidth: 1, borderColor: BORDER, borderRadius: 18 }, partBig: { color: DARK, fontSize: 19, fontWeight: '900' }, partName: { marginTop: 4, color: MUTED }, infoGrid: { marginTop: 14, flexDirection: 'row', flexWrap: 'wrap' }, infoCell: { width: '50%', paddingVertical: 8 }, infoLabel: { color: MUTED, fontSize: 10, fontWeight: '700' }, infoValue: { marginTop: 3, color: DARK, fontWeight: '900' },
-  bottomPanel: { padding: 12, paddingBottom: Platform.OS === 'ios' ? 22 : 12, backgroundColor: '#fff', borderTopWidth: 1, borderTopColor: BORDER }, inlineInputRow: { flexDirection: 'row', alignItems: 'center' }, bottomInput: { flex: 1, minHeight: 48, marginBottom: 9, paddingHorizontal: 13, borderWidth: 1, borderColor: BORDER, borderRadius: 12, backgroundColor: '#fafcff', color: DARK }, squareButton: { width: 48, height: 48, marginLeft: 8, marginBottom: 9, borderRadius: 12, backgroundColor: BLUE, alignItems: 'center', justifyContent: 'center' }, squareButtonText: { color: '#fff', fontSize: 20, fontWeight: '900' }, twoInputs: { flexDirection: 'row' }, halfInput: { marginRight: 8 }, actionRow: { flexDirection: 'row', alignItems: 'center' },
-  chipWrap: { marginTop: 14, flexDirection: 'row', flexWrap: 'wrap' }, chip: { marginRight: 7, marginBottom: 7, paddingHorizontal: 10, paddingVertical: 8, backgroundColor: '#edf3ff', borderRadius: 10 }, chipText: { color: BLUE, fontSize: 11, fontWeight: '800' }, stockRow: { marginBottom: 10, padding: 14, backgroundColor: '#fff', borderWidth: 1, borderColor: BORDER, borderRadius: 15, flexDirection: 'row', alignItems: 'center' }, stockRight: { alignItems: 'flex-end' }, stockQty: { color: SUCCESS, fontSize: 16, fontWeight: '900' }, stockLoc: { marginTop: 3, color: DARK, fontSize: 11 }, stockValue: { marginTop: 3, color: MUTED, fontSize: 11 },
-  listContent: { padding: 14, paddingBottom: 30 }, requestCard: { marginBottom: 12, padding: 16, backgroundColor: '#fff', borderWidth: 1, borderColor: BORDER, borderRadius: 17 }, rowBetween: { flexDirection: 'row', justifyContent: 'space-between', alignItems: 'center' }, requestNo: { color: DARK, fontSize: 16, fontWeight: '900' }, newBadge: { paddingHorizontal: 8, paddingVertical: 4, borderRadius: 7, backgroundColor: DANGER, color: '#fff', fontSize: 9, fontWeight: '900' }, requestFrom: { marginTop: 9, color: '#42506a', fontSize: 12 }, requestMeta: { marginTop: 7, color: MUTED, fontSize: 11 }, requestActions: { marginTop: 13, flexDirection: 'row' }, snoozeButton: { flex: 1, minHeight: 42, borderWidth: 1, borderColor: BORDER, borderRadius: 11, alignItems: 'center', justifyContent: 'center', marginRight: 8 }, snoozeText: { color: MUTED, fontWeight: '800' }, pickButton: { flex: 1.5, minHeight: 42, backgroundColor: BLUE, borderRadius: 11, alignItems: 'center', justifyContent: 'center' }, pickText: { color: '#fff', fontWeight: '900' },
-  requestHeader: { padding: 14, backgroundColor: '#fff', borderBottomWidth: 1, borderBottomColor: BORDER, alignItems: 'center' }, requestHeaderNo: { color: DARK, fontSize: 17, fontWeight: '900' }, requestHeaderSub: { marginTop: 3, color: MUTED, fontSize: 11 }, requestPartsContent: { padding: 10, paddingBottom: 30 }, tableHeader: { flexDirection: 'row', paddingHorizontal: 8, paddingVertical: 9, backgroundColor: '#edf3ff', borderRadius: 10 }, th: { flex: 1, color: DARK, fontSize: 9, fontWeight: '900', textAlign: 'center' }, requestPartRow: { marginTop: 9, padding: 10, backgroundColor: '#fff', borderWidth: 1, borderColor: BORDER, borderRadius: 13 }, requestMainLine: { flexDirection: 'row', alignItems: 'center' }, tdStrong: { color: DARK, fontSize: 10, fontWeight: '900' }, td: { flex: 1, textAlign: 'center', color: DARK, fontSize: 10 }, qtyInput: { flex: 1, height: 38, paddingHorizontal: 5, borderWidth: 1, borderColor: BORDER, borderRadius: 7, textAlign: 'center', color: DARK }, requestExtra: { marginTop: 9, flexDirection: 'row', justifyContent: 'space-between', alignItems: 'center' }, requestExtraText: { flex: 1, color: MUTED, fontSize: 9 }, remarkInput: { marginTop: 8, minHeight: 40, paddingHorizontal: 10, borderWidth: 1, borderColor: BORDER, borderRadius: 9, color: DARK }, submitBar: { padding: 12, backgroundColor: '#fff', borderTopWidth: 1, borderTopColor: BORDER },
-  scannerPage: { flex: 1, backgroundColor: '#000' }, qrFrame: { position: 'absolute', top: '28%', left: '15%', right: '15%', aspectRatio: 1, borderWidth: 1, borderColor: 'rgba(255,255,255,0.35)' }, qrCornerTL: { position: 'absolute', left: -2, top: -2, width: 34, height: 34, borderLeftWidth: 4, borderTopWidth: 4, borderColor: '#62f08d' }, qrCornerTR: { position: 'absolute', right: -2, top: -2, width: 34, height: 34, borderRightWidth: 4, borderTopWidth: 4, borderColor: '#62f08d' }, qrCornerBL: { position: 'absolute', left: -2, bottom: -2, width: 34, height: 34, borderLeftWidth: 4, borderBottomWidth: 4, borderColor: '#62f08d' }, qrCornerBR: { position: 'absolute', right: -2, bottom: -2, width: 34, height: 34, borderRightWidth: 4, borderBottomWidth: 4, borderColor: '#62f08d' }, scannerShade: { ...StyleSheet.absoluteFillObject, backgroundColor: 'rgba(0,0,0,0.42)' }, scannerClose: { position: 'absolute', top: 18, left: 18, width: 44, height: 44, borderRadius: 22, backgroundColor: 'rgba(0,0,0,0.55)', alignItems: 'center', justifyContent: 'center' }, scannerCloseText: { color: '#fff', fontSize: 30 }, scanFrame: { position: 'absolute', left: 36, right: 36, top: 190, height: 120, borderWidth: 2, borderColor: '#4ee070', borderRadius: 15, overflow: 'hidden', backgroundColor: 'rgba(255,255,255,0.04)' }, scanBeam: { height: 3, backgroundColor: '#70ff8d', shadowColor: '#70ff8d', shadowOpacity: 1, shadowRadius: 8, elevation: 8 }, scanHelp: { position: 'absolute', top: 330, left: 20, right: 20, textAlign: 'center', color: '#fff', fontSize: 14, fontWeight: '700' }, scannerBottomBar: { position: 'absolute', left: 20, right: 20, bottom: 38, alignItems: 'center' }, scanButton: { width: '100%', minHeight: 54, borderRadius: 15, backgroundColor: BLUE, alignItems: 'center', justifyContent: 'center' }, scanButtonText: { color: '#fff', fontWeight: '900' }, vibrationNote: { marginTop: 10, color: '#d6dbe5', fontSize: 11 },
+  flex: { flex: 1 },
+  safeArea: { flex: 1, backgroundColor: BG },
+  center: { alignItems: 'center', justifyContent: 'center' },
+  offline: { backgroundColor: '#fff2c7', paddingVertical: 7, alignItems: 'center' },
+  offlineText: { color: '#7b5b00', fontSize: 12, fontWeight: '700' },
+  pairPage: { flexGrow: 1, justifyContent: 'center', padding: 24, paddingBottom: 56 },
+  qrInfo: { color: MUTED, fontSize: 12, lineHeight: 18, marginBottom: 16 },
+  detectedUser: { marginTop: 12, color: SUCCESS, fontSize: 12, fontWeight: '800', textAlign: 'center' },
+  brandLogo: { alignSelf: 'center', width: 190, height: 190 },
+  appTitle: { marginTop: 16, textAlign: 'center', color: DARK, fontSize: 24, fontWeight: '900' },
+  appSub: { marginTop: 4, marginBottom: 22, textAlign: 'center', color: MUTED, fontSize: 11, fontWeight: '800', letterSpacing: 1.4 },
+  card: { backgroundColor: '#fff', padding: 18, borderRadius: 20, borderWidth: 1, borderColor: BORDER },
+  homePage: { padding: 20, paddingBottom: 50 },
+  homeHeader: { flexDirection: 'row', justifyContent: 'space-between', alignItems: 'center' },
+  hello: { color: MUTED, fontSize: 11, fontWeight: '800' },
+  homeName: { marginTop: 3, color: DARK, fontSize: 24, fontWeight: '900' },
+  logout: { color: DANGER, fontWeight: '800' },
+  branchCard: { marginTop: 20, marginBottom: 22, padding: 18, backgroundColor: BLUE, borderRadius: 20 },
+  branchTitle: { color: '#fff', fontSize: 18, fontWeight: '900' },
+  branchSub: { marginTop: 5, color: '#dbe7ff', fontSize: 12 },
+  menuButton: {
+    minHeight: 82,
+    marginBottom: 13,
+    padding: 15,
+    backgroundColor: '#fff',
+    borderWidth: 1,
+    borderColor: BORDER,
+    borderRadius: 18,
+    flexDirection: 'row',
+    alignItems: 'center',
+  },
+  menuIcon: {
+    width: 48,
+    height: 48,
+    borderRadius: 15,
+    backgroundColor: '#edf3ff',
+    alignItems: 'center',
+    justifyContent: 'center',
+    marginRight: 13,
+  },
+  menuTitle: { color: DARK, fontSize: 16, fontWeight: '900' },
+  menuSub: { marginTop: 4, color: MUTED, fontSize: 11 },
+  chevron: { color: BLUE, fontSize: 28 },
+  pendingCard: {
+    marginTop: 10,
+    padding: 14,
+    backgroundColor: '#fff7e6',
+    borderRadius: 14,
+    flexDirection: 'row',
+    justifyContent: 'space-between',
+  },
+  pendingText: { color: '#865b00', flex: 1 },
+  pendingAction: { color: BLUE, fontWeight: '900' },
+  topContent: { padding: 14, paddingBottom: 20 },
+  sectionLabel: { marginBottom: 10, color: DARK, fontSize: 11, fontWeight: '900' },
+  verificationRow: {
+    marginBottom: 10,
+    padding: 14,
+    backgroundColor: '#fff',
+    borderWidth: 1,
+    borderColor: BORDER,
+    borderRadius: 15,
+    flexDirection: 'row',
+  },
+  rowPartNo: { color: DARK, fontSize: 14, fontWeight: '900' },
+  rowPartName: { marginTop: 3, color: MUTED, fontSize: 11 },
+  rowMeta: { marginTop: 7, color: '#4b5563', fontSize: 11 },
+  delete: { marginTop: 10, color: DANGER, fontSize: 11, fontWeight: '800' },
+  summaryRow: { marginTop: 4, marginBottom: 14, flexDirection: 'row' },
+  miniStat: {
+    flex: 1,
+    marginRight: 6,
+    paddingVertical: 10,
+    backgroundColor: '#fff',
+    borderWidth: 1,
+    borderColor: BORDER,
+    borderRadius: 12,
+    alignItems: 'center',
+  },
+  miniValue: { color: BLUE, fontSize: 17, fontWeight: '900' },
+  miniLabel: { marginTop: 3, color: MUTED, fontSize: 9 },
+  detailCard: { padding: 16, backgroundColor: '#fff', borderWidth: 1, borderColor: BORDER, borderRadius: 18 },
+  partBig: { color: DARK, fontSize: 19, fontWeight: '900' },
+  partName: { marginTop: 4, color: MUTED },
+  infoGrid: { marginTop: 14, flexDirection: 'row', flexWrap: 'wrap' },
+  infoCell: { width: '50%', paddingVertical: 8 },
+  infoLabel: { color: MUTED, fontSize: 10, fontWeight: '700' },
+  infoValue: { marginTop: 3, color: DARK, fontWeight: '900' },
+  bottomPanel: {
+    padding: 12,
+    paddingBottom: Platform.OS === 'ios' ? 22 : 12,
+    backgroundColor: '#fff',
+    borderTopWidth: 1,
+    borderTopColor: BORDER,
+  },
+  inlineInputRow: { flexDirection: 'row', alignItems: 'center' },
+  bottomInput: {
+    flex: 1,
+    minHeight: 48,
+    marginBottom: 9,
+    paddingHorizontal: 13,
+    borderWidth: 1,
+    borderColor: BORDER,
+    borderRadius: 12,
+    backgroundColor: '#fafcff',
+    color: DARK,
+  },
+  twoInputs: { flexDirection: 'row' },
+  halfInput: { marginRight: 8 },
+  actionRow: { flexDirection: 'row', alignItems: 'center' },
+  listContent: { padding: 14, paddingBottom: 30 },
+  requestCard: { marginBottom: 12, padding: 16, backgroundColor: '#fff', borderWidth: 1, borderColor: BORDER, borderRadius: 17 },
+  rowBetween: { flexDirection: 'row', justifyContent: 'space-between', alignItems: 'center' },
+  requestNo: { color: DARK, fontSize: 16, fontWeight: '900' },
+  newBadge: { paddingHorizontal: 8, paddingVertical: 4, borderRadius: 7, backgroundColor: DANGER, color: '#fff', fontSize: 9, fontWeight: '900', overflow: 'hidden' },
+  requestFrom: { marginTop: 9, color: '#42506a', fontSize: 12 },
+  requestMeta: { marginTop: 7, color: MUTED, fontSize: 11 },
+  requestActions: { marginTop: 13, flexDirection: 'row' },
+  snoozeButton: {
+    flex: 1,
+    minHeight: 42,
+    borderWidth: 1,
+    borderColor: BORDER,
+    borderRadius: 11,
+    alignItems: 'center',
+    justifyContent: 'center',
+    marginRight: 8,
+  },
+  snoozeText: { color: MUTED, fontWeight: '800' },
+  pickButton: { flex: 1.5, minHeight: 42, backgroundColor: BLUE, borderRadius: 11, alignItems: 'center', justifyContent: 'center' },
+  pickText: { color: '#fff', fontWeight: '900' },
+  requestHeader: { padding: 14, backgroundColor: '#fff', borderBottomWidth: 1, borderBottomColor: BORDER, alignItems: 'center' },
+  requestHeaderNo: { color: DARK, fontSize: 17, fontWeight: '900' },
+  requestHeaderSub: { marginTop: 3, color: MUTED, fontSize: 11 },
+  requestPartsContent: { padding: 10, paddingBottom: 30 },
+  tableHeader: { flexDirection: 'row', paddingHorizontal: 8, paddingVertical: 9, backgroundColor: '#edf3ff', borderRadius: 10 },
+  th: { flex: 1, color: DARK, fontSize: 9, fontWeight: '900', textAlign: 'center' },
+  requestPartRow: { marginTop: 9, padding: 10, backgroundColor: '#fff', borderWidth: 1, borderColor: BORDER, borderRadius: 13 },
+  requestMainLine: { flexDirection: 'row', alignItems: 'center' },
+  tdStrong: { color: DARK, fontSize: 10, fontWeight: '900' },
+  td: { flex: 1, textAlign: 'center', color: DARK, fontSize: 10 },
+  qtyInput: { flex: 1, height: 38, paddingHorizontal: 5, borderWidth: 1, borderColor: BORDER, borderRadius: 7, textAlign: 'center', color: DARK },
+  requestExtra: { marginTop: 9, flexDirection: 'row', justifyContent: 'space-between', alignItems: 'center' },
+  requestExtraText: { flex: 1, color: MUTED, fontSize: 9 },
+  remarkInput: { marginTop: 8, minHeight: 40, paddingHorizontal: 10, borderWidth: 1, borderColor: BORDER, borderRadius: 9, color: DARK },
+  submitBar: { padding: 12, backgroundColor: '#fff', borderTopWidth: 1, borderTopColor: BORDER },
+  scannerPage: { flex: 1, backgroundColor: '#000' },
+  qrFrame: { position: 'absolute', top: '28%', left: '15%', right: '15%', aspectRatio: 1, borderWidth: 1, borderColor: 'rgba(255,255,255,0.35)' },
+  qrCornerTL: { position: 'absolute', left: -2, top: -2, width: 34, height: 34, borderLeftWidth: 4, borderTopWidth: 4, borderColor: '#62f08d' },
+  qrCornerTR: { position: 'absolute', right: -2, top: -2, width: 34, height: 34, borderRightWidth: 4, borderTopWidth: 4, borderColor: '#62f08d' },
+  qrCornerBL: { position: 'absolute', left: -2, bottom: -2, width: 34, height: 34, borderLeftWidth: 4, borderBottomWidth: 4, borderColor: '#62f08d' },
+  qrCornerBR: { position: 'absolute', right: -2, bottom: -2, width: 34, height: 34, borderRightWidth: 4, borderBottomWidth: 4, borderColor: '#62f08d' },
+  scannerShade: { ...StyleSheet.absoluteFillObject, backgroundColor: 'rgba(0,0,0,0.42)' },
+  scannerClose: {
+    position: 'absolute',
+    top: 18,
+    left: 18,
+    width: 44,
+    height: 44,
+    borderRadius: 22,
+    backgroundColor: 'rgba(0,0,0,0.55)',
+    alignItems: 'center',
+    justifyContent: 'center',
+  },
+  scannerCloseText: { color: '#fff', fontSize: 30 },
+  scanFrame: {
+    position: 'absolute',
+    left: 36,
+    right: 36,
+    top: 190,
+    height: 120,
+    borderWidth: 2,
+    borderColor: '#4ee070',
+    borderRadius: 15,
+    overflow: 'hidden',
+    backgroundColor: 'rgba(255,255,255,0.04)',
+  },
+  scanBeam: { height: 3, backgroundColor: '#70ff8d', shadowColor: '#70ff8d', shadowOpacity: 1, shadowRadius: 8, elevation: 8 },
+  scanHelp: { position: 'absolute', top: 330, left: 20, right: 20, textAlign: 'center', color: '#fff', fontSize: 14, fontWeight: '700' },
+  scannerBottomBar: { position: 'absolute', left: 20, right: 20, bottom: 38, alignItems: 'center' },
+  scanButton: { width: '100%', minHeight: 54, borderRadius: 15, backgroundColor: BLUE, alignItems: 'center', justifyContent: 'center' },
+  scanButtonText: { color: '#fff', fontWeight: '900' },
+  vibrationNote: { marginTop: 10, color: '#d6dbe5', fontSize: 11 },
 });

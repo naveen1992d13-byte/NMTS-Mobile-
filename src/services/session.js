@@ -37,23 +37,32 @@ export async function clearSession() {
   }
 }
 
-
-function localDateKey(date = new Date()) {
-  const year = date.getFullYear();
-  const month = String(date.getMonth() + 1).padStart(2, '0');
-  const day = String(date.getDate()).padStart(2, '0');
-  return `${year}${month}${day}`;
-}
-
 /**
- * One verification session per physical mobile/device per local calendar day.
- * Every upload batch on the same device and day receives this same ID.
+ * IST calendar day key (Asia/Kolkata). Used only for display/diagnostics.
+ * Authoritative daily verification session IDs come from the backend:
+ * - Auto Perpetual: GET /mobile/auto-perpetual/session/today (AOPS…)
+ * - Physical: created server-side on POST /mobile/stock-verification (MOPS…)
+ * Do not invent a second client-side session-id strategy per part or per upload.
  */
-export async function getDailyVerificationSessionId(sessionOverride = null) {
-  const session = sessionOverride || await getSession();
-  const devicePart = String(session?.deviceId || session?.mobileUserId || 'DEVICE')
-    .toUpperCase()
-    .replace(/[^A-Z0-9]/g, '')
-    .slice(-12) || 'DEVICE';
-  return `SV${localDateKey()}${devicePart}`;
+export function istDateKey(date = new Date()) {
+  try {
+    const parts = new Intl.DateTimeFormat('en-CA', {
+      timeZone: 'Asia/Kolkata',
+      year: 'numeric',
+      month: '2-digit',
+      day: '2-digit',
+    }).formatToParts(date);
+    const year = parts.find((p) => p.type === 'year')?.value;
+    const month = parts.find((p) => p.type === 'month')?.value;
+    const day = parts.find((p) => p.type === 'day')?.value;
+    if (year && month && day) return `${year}-${month}-${day}`;
+  } catch (_error) {
+    // Fall through to UTC+5:30 approximation.
+  }
+  const istMs = date.getTime() + (5.5 * 60 * 60 * 1000);
+  const ist = new Date(istMs);
+  const year = ist.getUTCFullYear();
+  const month = String(ist.getUTCMonth() + 1).padStart(2, '0');
+  const day = String(ist.getUTCDate()).padStart(2, '0');
+  return `${year}-${month}-${day}`;
 }
