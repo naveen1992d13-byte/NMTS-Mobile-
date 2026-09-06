@@ -7,15 +7,41 @@ import { Platform } from 'react-native';
 import * as Notifications from 'expo-notifications';
 import * as Device from 'expo-device';
 import Constants from 'expo-constants';
+import * as SecureStore from 'expo-secure-store';
 import { registerPushToken } from '../api';
 
 const ANDROID_CHANNEL_ID = 'sleeping-stock-requests';
+const LAST_TAP_KEY = 'sleeping_stock_last_push_tap_id';
 
 let responseListenerSub = null;
 let receivedListenerSub = null;
 let initializedForDeviceId = null;
 let lastHandledResponseId = null;
 let teardownFn = null;
+
+async function loadLastHandledId() {
+  if (lastHandledResponseId) return lastHandledResponseId;
+  try {
+    lastHandledResponseId = await SecureStore.getItemAsync(LAST_TAP_KEY);
+  } catch (_error) {
+    lastHandledResponseId = lastHandledResponseId || null;
+  }
+  return lastHandledResponseId;
+}
+
+function rememberHandledId(responseId) {
+  if (!responseId || lastHandledResponseId === responseId) return false;
+  lastHandledResponseId = responseId;
+  SecureStore.setItemAsync(LAST_TAP_KEY, responseId).catch(() => {});
+  return true;
+}
+
+function responseKey(response) {
+  return (
+    response?.notification?.request?.identifier ||
+    JSON.stringify(response?.notification?.request?.content?.data || {})
+  );
+}
 
 Notifications.setNotificationHandler({
   handleNotification: async () => ({
@@ -111,6 +137,8 @@ export async function initPushNotifications({
     await syncPushTokenWithBackend(token);
   }
 
+  await loadLastHandledId();
+
   receivedListenerSub = Notifications.addNotificationReceivedListener((notification) => {
     try {
       onNotificationReceived?.(notification.request.content.data);
@@ -120,22 +148,22 @@ export async function initPushNotifications({
   });
 
   responseListenerSub = Notifications.addNotificationResponseReceivedListener((response) => {
-    try {
-      const responseId = response?.notification?.request?.identifier || JSON.stringify(response?.notification?.request?.content?.data || {});
-      if (responseId && responseId === lastHandledResponseId) return;
-      lastHandledResponseId = responseId;
-      onNotificationTapped?.(response.notification.request.content.data);
-    } catch (error) {
-      console.log('[push] onNotificationTapped handler error', error);
-    }
+    (async () => {
+      try {
+        const responseId = responseKey(response);
+        if (!(await rememberHandledId(responseId))) return;
+        onNotificationTapped?.(response.notification.request.content.data);
+      } catch (error) {
+        console.log('[push] onNotificationTapped handler error', error);
+      }
+    })();
   });
 
   Notifications.getLastNotificationResponseAsync()
-    .then((response) => {
+    .then(async (response) => {
       if (!response) return;
-      const responseId = response?.notification?.request?.identifier || JSON.stringify(response?.notification?.request?.content?.data || {});
-      if (responseId && responseId === lastHandledResponseId) return;
-      lastHandledResponseId = responseId;
+      const responseId = responseKey(response);
+      if (!(await rememberHandledId(responseId))) return;
       onNotificationTapped?.(response.notification.request.content.data);
     })
     .catch((error) => console.log('[push] getLastNotificationResponseAsync failed', error));
@@ -161,7 +189,7 @@ export const PUSH_MANUAL_TEST_NOTES = [
   'Foreground banner/alert while app is open',
   'Background delivery while app is minimized',
   'Killed-app delivery via FCM',
-  'Tap opens Notifications or Auto Perpetual as expected',
+  'Tap opens the exact Request detail or Auto Perpetual as expected',
   'Snooze / Skip / Pick still work after tap navigation',
   'No duplicate handler fires after screen changes',
 ];
