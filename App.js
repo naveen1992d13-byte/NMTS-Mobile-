@@ -189,6 +189,7 @@ export default function App() {
   const screenRef = useRef(screen);
   const loadAutoTasksRef = useRef(null);
   const loadNotificationsRef = useRef(null);
+  const openRequestRef = useRef(null);
 
   useEffect(() => {
     screenRef.current = screen;
@@ -320,11 +321,34 @@ export default function App() {
       deviceId: session.deviceId,
       onNotificationReceived: (data) => {
         if (data?.type === 'auto_perpetual') loadAutoTasksRef.current?.();
-        if (screenRef.current === 'notifications') loadNotificationsRef.current?.();
+        if (data?.type === 'branch_request' || screenRef.current === 'notifications') {
+          loadNotificationsRef.current?.();
+        }
       },
       onNotificationTapped: (data) => {
         if (data?.type === 'auto_perpetual') {
           loadAutoTasksRef.current?.()?.finally?.(() => setScreen('auto'));
+          return;
+        }
+        if (data?.type === 'branch_request' || data?.screen === 'request') {
+          (async () => {
+            try {
+              const rows = await getNotifications();
+              setNotifications(rows || []);
+              const key = data.request_group_key || data.request_number;
+              const group = (rows || []).find((row) => (
+                row.request_group_key === key || row.request_number === data.request_number
+              ));
+              if (group && openRequestRef.current) {
+                openRequestRef.current(group);
+                return;
+              }
+            } catch {
+              // Fall through to the notifications list.
+            }
+            setScreen('notifications');
+            loadNotificationsRef.current?.();
+          })();
           return;
         }
         setScreen('notifications');
@@ -875,6 +899,7 @@ export default function App() {
     );
     setScreen('request');
   };
+  openRequestRef.current = openRequest;
 
   const submitRequestResponse = async () => {
     for (const row of requestRows) {
