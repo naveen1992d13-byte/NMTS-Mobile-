@@ -88,10 +88,17 @@ export async function registerForPushNotificationsAsync() {
 
     const projectId =
       Constants.expoConfig?.extra?.eas?.projectId || Constants.easConfig?.projectId;
-    const tokenResponse = await Notifications.getExpoPushTokenAsync(
-      projectId ? { projectId } : undefined
-    );
-    return tokenResponse.data;
+    if (!projectId) {
+      console.log('[push] Missing EAS projectId — cannot mint an Expo push token.');
+      return null;
+    }
+    const tokenResponse = await Notifications.getExpoPushTokenAsync({ projectId });
+    const token = tokenResponse?.data;
+    if (!token || !String(token).startsWith('ExponentPushToken[')) {
+      console.log('[push] Expo did not return a usable push token.');
+      return null;
+    }
+    return token;
   } catch (error) {
     console.log('[push] Failed to register for push notifications', error);
     return null;
