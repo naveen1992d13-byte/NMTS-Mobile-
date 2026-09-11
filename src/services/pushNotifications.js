@@ -1,15 +1,19 @@
 // Push notification helper for Sleeping Stock Mobile.
-//
-// Listeners must be registered once per valid device session and cleaned up
-// on logout/unmount. Re-initializing on every screen change caused duplicate
-// handlers in earlier builds.
+// Listeners register once per device session. Token errors are surfaced, not swallowed.
 import { Platform } from 'react-native';
 import * as Notifications from 'expo-notifications';
 import * as Device from 'expo-device';
 import Constants from 'expo-constants';
 import { registerPushToken } from '../api';
-
-const ANDROID_CHANNEL_ID = 'sleeping-stock-requests';
+import {
+  ACTION_OPEN_REQUEST,
+  ACTION_SNOOZE,
+  ANDROID_CHANNEL_ID,
+  ANDROID_SOUND_NAME,
+  REQUEST_CATEGORY_ID,
+  isSnoozeAction,
+  shouldOpenExactRequest,
+} from '../utils/requestAlert';
 
 let responseListenerSub = null;
 let receivedListenerSub = null;
@@ -31,56 +35,67 @@ async function ensureAndroidChannel() {
   if (Platform.OS !== 'android') return;
   await Notifications.setNotificationChannelAsync(ANDROID_CHANNEL_ID, {
     name: 'Branch Stock Requests',
-    importance: Notifications.AndroidImportance.HIGH,
+    importance: Notifications.AndroidImportance.MAX,
     vibrationPattern: [0, 250, 250, 250],
-    lightColor: '#176b43',
-    sound: 'default',
+    lightColor: '#3ee0ff',
+    sound: ANDROID_SOUND_NAME,
+    enableVibrate: true,
     lockscreenVisibility: Notifications.AndroidNotificationVisibility.PUBLIC,
+    bypassDnd: false,
   });
 }
 
+async function ensureRequestCategory() {
+  await Notifications.setNotificationCategoryAsync(REQUEST_CATEGORY_ID, [
+    {
+      identifier: ACTION_OPEN_REQUEST,
+      buttonTitle: 'OPEN REQUEST',
+      options: { opensAppToForeground: true },
+    },
+    {
+      identifier: ACTION_SNOOZE,
+      buttonTitle: 'SNOOZE',
+      options: { opensAppToForeground: false },
+    },
+  ]);
+}
+
 export async function registerForPushNotificationsAsync() {
-  try {
-    await ensureAndroidChannel();
+  await ensureAndroidChannel();
+  await ensureRequestCategory();
 
-    if (!Device.isDevice) {
-      console.log('[push] Skipping push registration — running on a simulator/emulator.');
-      return null;
-    }
-
-    const existing = await Notifications.getPermissionsAsync();
-    let finalStatus = existing.status;
-    if (finalStatus !== 'granted') {
-      const requested = await Notifications.requestPermissionsAsync();
-      finalStatus = requested.status;
-    }
-
-    if (finalStatus !== 'granted') {
-      console.log('[push] Notification permission was not granted.');
-      return null;
-    }
-
-    const projectId =
-      Constants.expoConfig?.extra?.eas?.projectId || Constants.easConfig?.projectId;
-    const tokenResponse = await Notifications.getExpoPushTokenAsync(
-      projectId ? { projectId } : undefined
-    );
-    return tokenResponse.data;
-  } catch (error) {
-    console.log('[push] Failed to register for push notifications', error);
-    return null;
+  if (!Device.isDevice) {
+    throw new Error('Push tokens require a physical Android device.');
   }
+
+  const existing = await Notifications.getPermissionsAsync();
+  let finalStatus = existing.status;
+  if (finalStatus !== 'granted') {
+    const requested = await Notifications.requestPermissionsAsync();
+    finalStatus = requested.status;
+  }
+  if (finalStatus !== 'granted') {
+    throw new Error('Notification permission was not granted.');
+  }
+
+  const projectId =
+    Constants.expoConfig?.extra?.eas?.projectId || Constants.easConfig?.projectId;
+  if (!projectId) {
+    throw new Error('EAS projectId is missing from app.json.');
+  }
+
+  const tokenResponse = await Notifications.getExpoPushTokenAsync({ projectId });
+  const token = tokenResponse?.data;
+  if (!token || !String(token).startsWith('ExponentPushToken[')) {
+    throw new Error('Expo did not return a valid push token. Check Firebase/FCM credentials.');
+  }
+  return token;
 }
 
 export async function syncPushTokenWithBackend(token) {
   if (!token) return false;
-  try {
-    await registerPushToken(token);
-    return true;
-  } catch (error) {
-    console.log('[push] Failed to register push token with backend', error);
-    return false;
-  }
+  await registerPushToken(token);
+  return true;
 }
 
 function removeListeners() {
@@ -90,14 +105,22 @@ function removeListeners() {
   responseListenerSub = null;
 }
 
+function responseKey(response) {
+  return (
+    response?.notification?.request?.identifier ||
+    JSON.stringify(response?.notification?.request?.content?.data || {})
+  );
+}
+
 /**
- * Full startup routine. Safe to call repeatedly for the same deviceId —
- * listeners are only attached once until teardown/logout.
+ * Full startup routine. Safe to call repeatedly for the same deviceId.
  */
 export async function initPushNotifications({
   deviceId,
   onNotificationReceived,
   onNotificationTapped,
+  onNotificationSnoozed,
+  onTokenError,
 } = {}) {
   const key = deviceId || 'default';
   if (initializedForDeviceId === key && teardownFn) {
@@ -106,25 +129,39 @@ export async function initPushNotifications({
 
   removeListeners();
 
-  const token = await registerForPushNotificationsAsync();
-  if (token) {
-    await syncPushTokenWithBackend(token);
+  try {
+    const token = await registerForPushNotificationsAsync();
+    if (token) await syncPushTokenWithBackend(token);
+  } catch (error) {
+    console.log('[push] Token registration failed', error);
+    onTokenError?.(error);
   }
 
   receivedListenerSub = Notifications.addNotificationReceivedListener((notification) => {
     try {
-      onNotificationReceived?.(notification.request.content.data);
+      onNotificationReceived?.(notification.request.content.data, notification);
     } catch (error) {
       console.log('[push] onNotificationReceived handler error', error);
     }
   });
 
+  const handleResponse = (response) => {
+    const responseId = `${responseKey(response)}:${response?.actionIdentifier || ''}`;
+    if (responseId && responseId === lastHandledResponseId) return;
+    lastHandledResponseId = responseId;
+    const data = response?.notification?.request?.content?.data || {};
+    if (isSnoozeAction(response?.actionIdentifier)) {
+      onNotificationSnoozed?.(data, response);
+      return;
+    }
+    if (shouldOpenExactRequest(response?.actionIdentifier)) {
+      onNotificationTapped?.(data, response);
+    }
+  };
+
   responseListenerSub = Notifications.addNotificationResponseReceivedListener((response) => {
     try {
-      const responseId = response?.notification?.request?.identifier || JSON.stringify(response?.notification?.request?.content?.data || {});
-      if (responseId && responseId === lastHandledResponseId) return;
-      lastHandledResponseId = responseId;
-      onNotificationTapped?.(response.notification.request.content.data);
+      handleResponse(response);
     } catch (error) {
       console.log('[push] onNotificationTapped handler error', error);
     }
@@ -133,10 +170,7 @@ export async function initPushNotifications({
   Notifications.getLastNotificationResponseAsync()
     .then((response) => {
       if (!response) return;
-      const responseId = response?.notification?.request?.identifier || JSON.stringify(response?.notification?.request?.content?.data || {});
-      if (responseId && responseId === lastHandledResponseId) return;
-      lastHandledResponseId = responseId;
-      onNotificationTapped?.(response.notification.request.content.data);
+      handleResponse(response);
     })
     .catch((error) => console.log('[push] getLastNotificationResponseAsync failed', error));
 
@@ -149,19 +183,21 @@ export async function initPushNotifications({
   return teardownFn;
 }
 
-/**
- * Device-only behaviours that still need a physical Android device to confirm:
- * - OS-level FCM/Expo push delivery while backgrounded or killed
- * - Notification shade appearance / channel sound / vibration
- * - Cold-start tap navigation from a killed process
- * - Duplicate suppression across process restarts
- * - Permission denial / re-prompt flows on Android 13+
- */
+export async function dismissRequestNotification(notification) {
+  const identifier = notification?.request?.identifier;
+  if (identifier) {
+    try {
+      await Notifications.dismissNotificationAsync(identifier);
+    } catch (error) {
+      console.log('[push] dismiss failed', error);
+    }
+  }
+}
+
 export const PUSH_MANUAL_TEST_NOTES = [
-  'Foreground banner/alert while app is open',
-  'Background delivery while app is minimized',
+  'Foreground popup + custom ring while app is open',
+  'Background shade + custom ring while minimized',
   'Killed-app delivery via FCM',
-  'Tap opens Notifications or Auto Perpetual as expected',
-  'Snooze / Skip / Pick still work after tap navigation',
-  'No duplicate handler fires after screen changes',
+  'OPEN REQUEST opens the exact request_group_key',
+  'SNOOZE dismisses only the current alert',
 ];

@@ -9,7 +9,7 @@ import {
   TextInput,
   View,
 } from 'react-native';
-import { BLUE, BORDER, DARK, MUTED, SUCCESS, DANGER, WARNING } from '../theme';
+import { BLUE, BORDER, CARD_SOLID, DARK, MUTED, SUCCESS, DANGER, WARNING } from '../theme';
 import { AgingThresholdSelector, Empty, Header, PrimaryButton, StockResultCard } from './ui';
 
 export default function MultiPartSearchScreen({
@@ -46,7 +46,7 @@ export default function MultiPartSearchScreen({
           value={input}
           onChangeText={setInput}
           placeholder={'26300B1000\n28760H8030\n62419CU000\n95720B4500PJW'}
-          placeholderTextColor="#8793a6"
+            placeholderTextColor={MUTED}
           autoCapitalize="characters"
           autoCorrect={false}
           multiline
@@ -110,7 +110,7 @@ const styles = StyleSheet.create({
     borderWidth: 1,
     borderColor: BORDER,
     borderRadius: 14,
-    backgroundColor: '#fff',
+    backgroundColor: CARD_SOLID,
     color: DARK,
     fontSize: 14,
     lineHeight: 22,
@@ -120,8 +120,8 @@ const styles = StyleSheet.create({
     padding: 14,
     borderRadius: 14,
     borderWidth: 1,
-    borderColor: '#f0d19a',
-    backgroundColor: '#fffaf0',
+    borderColor: WARNING,
+    backgroundColor: 'rgba(240, 193, 77, 0.12)',
   },
   uploadBannerText: { color: WARNING, fontSize: 13, fontWeight: '800', lineHeight: 19 },
   summaryRow: { marginTop: 16, flexDirection: 'row' },
@@ -131,11 +131,11 @@ const styles = StyleSheet.create({
     borderRadius: 14,
     borderWidth: 1,
     borderColor: BORDER,
-    backgroundColor: '#fff',
+    backgroundColor: CARD_SOLID,
     alignItems: 'center',
   },
-  foundCard: { marginRight: 8, backgroundColor: '#f3fbf6', borderColor: '#9fd4b2' },
-  missingCard: { backgroundColor: '#fff7f7', borderColor: '#f0b4b4' },
+  foundCard: { marginRight: 8, backgroundColor: 'rgba(61, 255, 138, 0.10)', borderColor: SUCCESS },
+  missingCard: { backgroundColor: 'rgba(255, 93, 108, 0.10)', borderColor: DANGER },
   summaryValue: { color: SUCCESS, fontSize: 22, fontWeight: '900' },
   summaryLabel: { marginTop: 4, color: MUTED, fontSize: 11, fontWeight: '800' },
   notFoundBox: {
@@ -144,7 +144,7 @@ const styles = StyleSheet.create({
     borderRadius: 14,
     borderWidth: 1,
     borderColor: BORDER,
-    backgroundColor: '#fff',
+    backgroundColor: CARD_SOLID,
   },
   notFoundTitle: { color: DARK, fontWeight: '900', marginBottom: 8 },
   notFoundItem: { color: MUTED, fontSize: 12, marginBottom: 4 },

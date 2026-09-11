@@ -9,7 +9,7 @@ import {
   TextInput,
   View,
 } from 'react-native';
-import { BLUE, BORDER, DARK, MUTED, WARNING } from '../theme';
+import { BLUE, BORDER, CARD_SOLID, DARK, MUTED, WARNING } from '../theme';
 import { AgingThresholdSelector, Empty, Header, PrimaryButton, SecondaryButton, SquareButton, StockResultCard } from './ui';
 
 export default function StockAvailabilityScreen({
@@ -50,7 +50,7 @@ export default function StockAvailabilityScreen({
             value={input}
             onChangeText={setInput}
             placeholder="e.g. 26300"
-            placeholderTextColor="#8793a6"
+            placeholderTextColor={MUTED}
             autoCapitalize="characters"
             autoCorrect={false}
             returnKeyType="search"
@@ -107,7 +107,7 @@ const styles = StyleSheet.create({
   flex: { flex: 1 },
   searchPanel: {
     padding: 14,
-    backgroundColor: '#fff',
+    backgroundColor: CARD_SOLID,
     borderBottomWidth: 1,
     borderBottomColor: BORDER,
   },
@@ -120,7 +120,7 @@ const styles = StyleSheet.create({
     borderWidth: 1,
     borderColor: BORDER,
     borderRadius: 12,
-    backgroundColor: '#fafcff',
+    backgroundColor: 'rgba(8, 16, 28, 0.92)',
     color: DARK,
   },
   actionRow: { marginTop: 10, flexDirection: 'row', alignItems: 'center' },
@@ -131,8 +131,8 @@ const styles = StyleSheet.create({
     padding: 14,
     borderRadius: 14,
     borderWidth: 1,
-    borderColor: '#f0d19a',
-    backgroundColor: '#fffaf0',
+    borderColor: WARNING,
+    backgroundColor: 'rgba(240, 193, 77, 0.12)',
   },
   uploadBannerText: { color: WARNING, fontSize: 13, fontWeight: '800', lineHeight: 19 },
   notFoundBox: {
@@ -141,7 +141,7 @@ const styles = StyleSheet.create({
     borderRadius: 14,
     borderWidth: 1,
     borderColor: BORDER,
-    backgroundColor: '#fff',
+    backgroundColor: CARD_SOLID,
   },
   notFoundTitle: { color: DARK, fontWeight: '900', marginBottom: 8 },
   notFoundItem: { color: MUTED, fontSize: 12, marginBottom: 4 },

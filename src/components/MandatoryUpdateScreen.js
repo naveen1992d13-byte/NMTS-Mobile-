@@ -1,6 +1,6 @@
 import React from 'react';
 import { Linking, StyleSheet, Text, View } from 'react-native';
-import { BLUE, BORDER, DARK, MUTED } from '../theme';
+import { BLUE, BORDER, CARD_SOLID, DARK, MUTED, BG } from '../theme';
 import { PrimaryButton } from './ui';
 
 export default function MandatoryUpdateScreen({ versionInfo, currentVersionCode }) {
@@ -40,7 +40,7 @@ export default function MandatoryUpdateScreen({ versionInfo, currentVersionCode 
 const styles = StyleSheet.create({
   page: {
     flex: 1,
-    backgroundColor: '#f3f6fb',
+    backgroundColor: BG,
     alignItems: 'center',
     justifyContent: 'center',
     padding: 24,
@@ -48,7 +48,7 @@ const styles = StyleSheet.create({
   card: {
     width: '100%',
     maxWidth: 420,
-    backgroundColor: '#fff',
+    backgroundColor: CARD_SOLID,
     borderRadius: 20,
     borderWidth: 1,
     borderColor: BORDER,
@@ -61,7 +61,7 @@ const styles = StyleSheet.create({
     marginBottom: 18,
     padding: 12,
     borderRadius: 12,
-    backgroundColor: '#f5f7fb',
+    backgroundColor: 'rgba(8, 16, 28, 0.92)',
     color: DARK,
     fontSize: 12,
     lineHeight: 18,
