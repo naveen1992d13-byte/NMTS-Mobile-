@@ -29,13 +29,23 @@ if (expo.extra?.eas?.projectId === '545530df-24b8-4e30-a35d-0fb66b3c3f81') pass(
 else fail('EAS projectId missing');
 
 const plugin = (expo.plugins || []).find((p) => Array.isArray(p) && p[0] === 'expo-notifications');
-if (plugin?.[1]?.defaultChannel === 'sleeping-stock-requests-v2') pass('notification defaultChannel configured');
+if (plugin?.[1]?.defaultChannel === 'sleeping-stock-requests-v3') pass('notification defaultChannel configured');
 else fail('notification plugin channel missing');
 
+const SOUND_REL = './assets/sounds/sleeping_stock_alert_2_rising_dispatch.wav';
 const sounds = plugin?.[1]?.sounds || [];
-if (sounds.includes('./assets/nmts-request-ring.wav') && exists('assets/nmts-request-ring.wav')) {
-  pass('custom sound packaged');
-} else fail('uploaded/custom sound file not packaged');
+if (sounds.includes(SOUND_REL) && exists('assets/sounds/sleeping_stock_alert_2_rising_dispatch.wav')) {
+  const buf = fs.readFileSync(path.join(root, 'assets/sounds/sleeping_stock_alert_2_rising_dispatch.wav'));
+  if (buf.slice(0, 4).toString() === 'RIFF') pass('selected custom sound packaged exactly');
+  else fail('sound file is not a valid WAV');
+} else fail('selected custom sound file not packaged');
+
+const requestAlert = read('src/utils/requestAlert.js');
+if (
+  requestAlert.includes("sleeping_stock_alert_2_rising_dispatch.wav") &&
+  requestAlert.includes("sleeping-stock-requests-v3")
+) pass('channel uses selected sound name');
+else fail('channel sound name mismatch');
 
 const push = read('src/services/pushNotifications.js');
 if (push.includes('getExpoPushTokenAsync') && push.includes('AndroidImportance.MAX') && push.includes('OPEN_REQUEST')) {

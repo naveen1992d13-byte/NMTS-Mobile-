@@ -1,5 +1,6 @@
-export const ANDROID_CHANNEL_ID = 'sleeping-stock-requests-v2';
-export const ANDROID_SOUND_NAME = 'nmts-request-ring';
+export const ANDROID_CHANNEL_ID = 'sleeping-stock-requests-v3';
+export const ANDROID_SOUND_FILE = 'sleeping_stock_alert_2_rising_dispatch.wav';
+export const ANDROID_SOUND_NAME = ANDROID_SOUND_FILE;
 export const REQUEST_CATEGORY_ID = 'branch-request';
 export const ACTION_OPEN_REQUEST = 'OPEN_REQUEST';
 export const ACTION_SNOOZE = 'SNOOZE';
@@ -85,6 +86,6 @@ export function shouldOpenExactRequest(actionIdentifier) {
   );
 }
 
-export const PUSH_SOUND_ASSET = './assets/nmts-request-ring.wav';
+export const PUSH_SOUND_ASSET = './assets/sounds/sleeping_stock_alert_2_rising_dispatch.wav';
 export const PUSH_LOGO_ASSET = './assets/sleeping-stock-logo.png';
 export const PUSH_ICON_ASSET = './assets/icon.png';

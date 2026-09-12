@@ -2,13 +2,20 @@ import assert from 'node:assert/strict';
 import {
   ACTION_OPEN_REQUEST,
   ACTION_SNOOZE,
+  ANDROID_CHANNEL_ID,
+  ANDROID_SOUND_NAME,
   DEFAULT_NOTIFICATION_ACTION,
+  PUSH_SOUND_ASSET,
   buildIncomingAlert,
   findRequestGroup,
   formatSlaRemaining,
   isSnoozeAction,
   shouldOpenExactRequest,
 } from '../src/utils/requestAlert.js';
+
+assert.equal(ANDROID_SOUND_NAME, 'sleeping_stock_alert_2_rising_dispatch.wav');
+assert.equal(ANDROID_CHANNEL_ID, 'sleeping-stock-requests-v3');
+assert.equal(PUSH_SOUND_ASSET, './assets/sounds/sleeping_stock_alert_2_rising_dispatch.wav');
 
 const now = Date.parse('2026-09-11T12:00:00.000Z');
 assert.equal(formatSlaRemaining(90, now), '1m 30s');

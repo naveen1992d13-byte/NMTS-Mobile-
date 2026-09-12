@@ -42,6 +42,10 @@ async function ensureAndroidChannel() {
     enableVibrate: true,
     lockscreenVisibility: Notifications.AndroidNotificationVisibility.PUBLIC,
     bypassDnd: false,
+    audioAttributes: {
+      usage: Notifications.AndroidAudioUsage.NOTIFICATION_RINGTONE,
+      contentType: Notifications.AndroidAudioContentType.SONIFICATION,
+    },
   });
 }
 

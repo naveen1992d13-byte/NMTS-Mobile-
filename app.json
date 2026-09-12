@@ -43,7 +43,10 @@
         {
           "icon": "./assets/notification-icon.png",
           "color": "#3ee0ff",
-          "defaultChannel": "sleeping-stock-requests-v2"
+          "defaultChannel": "sleeping-stock-requests-v3",
+          "sounds": [
+            "./assets/sounds/sleeping_stock_alert_2_rising_dispatch.wav"
+          ]
         }
       ]
     ],
