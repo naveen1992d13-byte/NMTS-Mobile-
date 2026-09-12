@@ -10,7 +10,7 @@ Mobile" page.
 |---|---|---|---|
 | 1 | `app.json` | `expo.extra.apiBaseUrl` (line ~18) | Your real backend URL, e.g. `https://nmts.yourdomain.com/api` |
 | 2 | `app.json` | `expo.extra.eas.projectId` | Already set to the Sleeping Stock EAS project |
-| 3 | `google-services.json` | Firebase Android app for package `in.sleepingstock.mobile` | Download from Firebase Console (same package name) and replace the placeholder file. Then upload the FCM V1 service-account JSON via `eas credentials`. |
+| 3 | `google-services.json` | Firebase Android app for package `in.sleepingstock.mobile` | Already added from the Firebase Console download. |
 | 4 | `assets/sounds/sleeping_stock_alert_2_rising_dispatch.wav` | Request alert sound | Already in the repo. Do not rename. The `expo-notifications` plugin `sounds` array and Android channel already point at this file. |
 | 5 | Signing key | *(no file — generated via CLI)* | Run `eas credentials` → Android → "Set Up a New Keystore" (see §8) before your first `production` build |
 

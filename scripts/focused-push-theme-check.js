@@ -88,8 +88,15 @@ if (read('src/theme.js').includes('#05070d') && read('src/theme.js').includes('3
 else fail('theme tokens missing');
 
 const gsKey = gs.client?.[0]?.api_key?.[0]?.current_key || '';
-if (gsKey === 'REPLACE_WITH_FIREBASE_ANDROID_API_KEY' || gsKey.includes('REPLACE')) {
+if (gsKey === 'REPLACE_WITH_FIREBASE_ANDROID_API_KEY' || gsKey.includes('REPLACE') || !gsKey) {
   fail('google-services.json is a placeholder — real Firebase Android key required for live tokens');
 } else pass('google-services.json has a non-placeholder API key');
+
+const uploadedGs = '/home/ubuntu/.cursor/projects/agent/uploads/google-services_571f.json';
+if (fs.existsSync(uploadedGs) && sha('google-services.json') === crypto.createHash('sha256').update(fs.readFileSync(uploadedGs)).digest('hex')) {
+  pass('google-services.json matches uploaded Firebase file exactly');
+} else if (gs.project_info?.project_id === 'nmts-mobile' && gs.project_info?.project_number === '295465839675') {
+  pass('google-services.json is the nmts-mobile Firebase Android file');
+} else fail('google-services.json does not match the uploaded Firebase file');
 
 console.log(process.exitCode ? 'FOCUSED CHECKS: FAIL' : 'FOCUSED CHECKS: PASS');
