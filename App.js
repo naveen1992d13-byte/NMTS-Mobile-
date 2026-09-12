@@ -189,6 +189,7 @@ export default function App() {
   const screenRef = useRef(screen);
   const loadAutoTasksRef = useRef(null);
   const loadNotificationsRef = useRef(null);
+  const openRequestRef = useRef(null);
 
   useEffect(() => {
     screenRef.current = screen;
@@ -320,11 +321,34 @@ export default function App() {
       deviceId: session.deviceId,
       onNotificationReceived: (data) => {
         if (data?.type === 'auto_perpetual') loadAutoTasksRef.current?.();
-        if (screenRef.current === 'notifications') loadNotificationsRef.current?.();
+        if (data?.type === 'branch_request' || screenRef.current === 'notifications') {
+          loadNotificationsRef.current?.();
+        }
       },
       onNotificationTapped: (data) => {
         if (data?.type === 'auto_perpetual') {
           loadAutoTasksRef.current?.()?.finally?.(() => setScreen('auto'));
+          return;
+        }
+        if (data?.type === 'branch_request' || data?.screen === 'request') {
+          (async () => {
+            try {
+              const rows = await getNotifications();
+              setNotifications(rows || []);
+              const key = data.request_group_key || data.request_number;
+              const group = (rows || []).find((row) => (
+                row.request_group_key === key || row.request_number === data.request_number
+              ));
+              if (group && openRequestRef.current) {
+                openRequestRef.current(group);
+                return;
+              }
+            } catch {
+              // Fall through to the notifications list.
+            }
+            setScreen('notifications');
+            loadNotificationsRef.current?.();
+          })();
           return;
         }
         setScreen('notifications');
@@ -866,8 +890,8 @@ export default function App() {
         requestedQty: numberValue(part.requested_qty),
         availableQty: numberValue(part.available_qty_at_request ?? part.available_qty),
         loc: part.loc || part.location || '-',
-        purchaseAging: part.purchase_aging ?? '-',
-        salesAging: part.sales_aging ?? '-',
+        purchaseAging: part.purchase_aging_days ?? part.purchase_aging ?? '-',
+        salesAging: part.sales_aging_days ?? part.sales_aging ?? '-',
         value: numberValue(part.part_value ?? part.value),
         acceptedQty: String(part.requested_qty ?? 0),
         remark: '',
@@ -875,6 +899,7 @@ export default function App() {
     );
     setScreen('request');
   };
+  openRequestRef.current = openRequest;
 
   const submitRequestResponse = async () => {
     for (const row of requestRows) {
@@ -1265,7 +1290,27 @@ function VerificationScreen(props) {
   );
 }
 
+function formatDeadlineCountdown(deadline, nowMs) {
+  if (!deadline) return '';
+  const end = Date.parse(String(deadline));
+  if (!Number.isFinite(end)) return '';
+  const left = Math.max(0, Math.floor((end - nowMs) / 1000));
+  if (left <= 0) return 'Expired';
+  const minutes = Math.floor(left / 60);
+  const seconds = left % 60;
+  if (minutes >= 60) {
+    const hours = Math.floor(minutes / 60);
+    return `${hours}:${String(minutes % 60).padStart(2, '0')}:${String(seconds).padStart(2, '0')} left`;
+  }
+  return `${minutes}:${String(seconds).padStart(2, '0')} left`;
+}
+
 function NotificationsScreen({ onBack, rows, busy, refresh, openRequest, pickRequest, snoozeRequest }) {
+  const [nowMs, setNowMs] = useState(Date.now());
+  useEffect(() => {
+    const id = setInterval(() => setNowMs(Date.now()), 1000);
+    return () => clearInterval(id);
+  }, []);
   return (
     <View style={styles.flex}>
       <Header title="Request List" onBack={onBack} action="Refresh" onAction={refresh} />
@@ -1279,7 +1324,9 @@ function NotificationsScreen({ onBack, rows, busy, refresh, openRequest, pickReq
           <TouchableOpacity style={styles.requestCard} onPress={() => openRequest(item)}>
             <View style={styles.rowBetween}>
               <Text style={styles.requestNo}>{item.request_number}</Text>
-              <Text style={styles.newBadge}>NEW</Text>
+              {!!item.response_deadline && (
+                <Text style={styles.deadlineBadge}>{formatDeadlineCountdown(item.response_deadline, nowMs) || item.response_status || ''}</Text>
+              )}
             </View>
             <Text style={styles.requestFrom}>From: {item.requesting_branch || item.requesting_dealer || '-'}</Text>
             <Text style={styles.requestMeta}>
@@ -1301,12 +1348,19 @@ function NotificationsScreen({ onBack, rows, busy, refresh, openRequest, pickReq
 }
 
 function RequestScreen({ onBack, request, rows, updateRow, onSubmit, busy }) {
+  const [nowMs, setNowMs] = useState(Date.now());
+  useEffect(() => {
+    const id = setInterval(() => setNowMs(Date.now()), 1000);
+    return () => clearInterval(id);
+  }, []);
+  const countdown = formatDeadlineCountdown(request?.response_deadline, nowMs);
   return (
     <View style={styles.flex}>
       <Header title="Request Parts" onBack={onBack} />
       <View style={styles.requestHeader}>
         <Text style={styles.requestHeaderNo}>{request?.request_number}</Text>
         <Text style={styles.requestHeaderSub}>{request?.requesting_branch || request?.requesting_dealer || '-'}</Text>
+        {!!countdown && <Text style={styles.requestDeadline}>{countdown}</Text>}
       </View>
       <ScrollView style={styles.flex} contentContainerStyle={styles.requestPartsContent} keyboardShouldPersistTaps="handled">
         <View style={styles.tableHeader}>
@@ -1599,7 +1653,8 @@ const styles = StyleSheet.create({
   requestCard: { marginBottom: 12, padding: 16, backgroundColor: '#fff', borderWidth: 1, borderColor: BORDER, borderRadius: 17 },
   rowBetween: { flexDirection: 'row', justifyContent: 'space-between', alignItems: 'center' },
   requestNo: { color: DARK, fontSize: 16, fontWeight: '900' },
-  newBadge: { paddingHorizontal: 8, paddingVertical: 4, borderRadius: 7, backgroundColor: DANGER, color: '#fff', fontSize: 9, fontWeight: '900', overflow: 'hidden' },
+  deadlineBadge: { paddingHorizontal: 8, paddingVertical: 4, borderRadius: 7, backgroundColor: '#FEF3C7', color: '#92400E', fontSize: 11, fontWeight: '800', overflow: 'hidden' },
+  requestDeadline: { marginTop: 6, color: '#92400E', fontSize: 13, fontWeight: '800' },
   requestFrom: { marginTop: 9, color: '#42506a', fontSize: 12 },
   requestMeta: { marginTop: 7, color: MUTED, fontSize: 11 },
   requestActions: { marginTop: 13, flexDirection: 'row' },

@@ -2,7 +2,7 @@
   "expo": {
     "name": "Sleeping Stock Mobile",
     "slug": "sleeping-stock-mobile",
-    "version": "1.3.2",
+    "version": "1.3.4",
     "orientation": "portrait",
     "userInterfaceStyle": "light",
     "newArchEnabled": true,
@@ -14,7 +14,7 @@
     },
     "android": {
       "package": "in.sleepingstock.mobile",
-      "versionCode": 8,
+      "versionCode": 10,
       "permissions": [
         "CAMERA",
         "POST_NOTIFICATIONS"
@@ -38,7 +38,9 @@
       [
         "expo-notifications",
         {
-          "color": "#2458c6"
+          "icon": "./assets/notification-icon.png",
+          "color": "#7CB342",
+          "defaultChannel": "sleeping-stock-requests"
         }
       ]
     ],
