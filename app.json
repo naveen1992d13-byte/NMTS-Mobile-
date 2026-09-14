@@ -38,7 +38,8 @@
       [
         "expo-notifications",
         {
-          "color": "#2458c6"
+          "color": "#2458c6",
+          "sounds": ["./assets/sounds/sleeping_stock_alert_2_rising_dispatch.wav"]
         }
       ]
     ],

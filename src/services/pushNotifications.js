@@ -34,7 +34,7 @@ async function ensureAndroidChannel() {
     importance: Notifications.AndroidImportance.HIGH,
     vibrationPattern: [0, 250, 250, 250],
     lightColor: '#176b43',
-    sound: 'default',
+    sound: 'sleeping_stock_alert_2_rising_dispatch.wav',
     lockscreenVisibility: Notifications.AndroidNotificationVisibility.PUBLIC,
   });
 }

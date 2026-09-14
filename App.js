@@ -3,6 +3,7 @@ import {
   ActivityIndicator,
   Alert,
   Animated,
+  AppState,
   BackHandler,
   FlatList,
   Image,
@@ -54,6 +55,7 @@ import {
   initPushNotifications,
   registerForPushNotificationsAsync,
 } from './src/services/pushNotifications';
+import { startRequestRingtone, stopRequestRingtone } from './src/services/requestRingtone';
 import {
   normalizePartNumber,
   splitPartNumbers,
@@ -189,6 +191,8 @@ export default function App() {
   const screenRef = useRef(screen);
   const loadAutoTasksRef = useRef(null);
   const loadNotificationsRef = useRef(null);
+  const snoozedRequestKeysRef = useRef(new Set());
+  const notificationsRef = useRef([]);
 
   useEffect(() => {
     screenRef.current = screen;
@@ -212,6 +216,7 @@ export default function App() {
 
     setOnSessionInvalidated(async () => {
       clearApiAuthCache();
+      await stopRequestRingtone();
       await clearSession();
       if (!mounted) return;
       setSession(null);
@@ -299,7 +304,16 @@ export default function App() {
     setNotificationsBusy(true);
     try {
       const rows = await getNotifications();
-      setNotifications(rows || []);
+      const list = rows || [];
+      setNotifications(list);
+      notificationsRef.current = list;
+      const live = list.find((row) => {
+        const key = row.request_group_key || row.request_number;
+        return key && !snoozedRequestKeysRef.current.has(key);
+      });
+      if (live && screenRef.current !== 'request') {
+        startRequestRingtone(live.request_group_key || live.request_number);
+      }
     } catch (error) {
       Alert.alert('Notifications', friendlyError(error));
     } finally {
@@ -320,12 +334,24 @@ export default function App() {
       deviceId: session.deviceId,
       onNotificationReceived: (data) => {
         if (data?.type === 'auto_perpetual') loadAutoTasksRef.current?.();
+        if (data?.type === 'branch_request' || data?.screen === 'request') {
+          const key = data.request_group_key || data.request_number;
+          if (key && !snoozedRequestKeysRef.current.has(key)) {
+            startRequestRingtone(key);
+          }
+          loadNotificationsRef.current?.();
+          return;
+        }
         if (screenRef.current === 'notifications') loadNotificationsRef.current?.();
       },
       onNotificationTapped: (data) => {
         if (data?.type === 'auto_perpetual') {
           loadAutoTasksRef.current?.()?.finally?.(() => setScreen('auto'));
           return;
+        }
+        const key = data?.request_group_key || data?.request_number;
+        if (key && !snoozedRequestKeysRef.current.has(key)) {
+          startRequestRingtone(key);
         }
         setScreen('notifications');
         loadNotificationsRef.current?.();
@@ -337,6 +363,21 @@ export default function App() {
       .catch(() => {});
     return () => teardown();
   }, [session?.deviceId]);
+
+  useEffect(() => {
+    const onAppState = (state) => {
+      if (state !== 'active') return;
+      const live = (notificationsRef.current || []).find((row) => {
+        const key = row.request_group_key || row.request_number;
+        return key && !snoozedRequestKeysRef.current.has(key);
+      });
+      if (live && screenRef.current !== 'request') {
+        startRequestRingtone(live.request_group_key || live.request_number);
+      }
+    };
+    const sub = AppState.addEventListener('change', onAppState);
+    return () => sub.remove();
+  }, []);
 
   useEffect(() => {
     const handleHardwareBack = () => {
@@ -837,6 +878,9 @@ export default function App() {
     setRequestBusy(true);
     try {
       await acceptNotification(group.request_group_key);
+      stopRequestRingtone();
+      if (group.request_group_key) snoozedRequestKeysRef.current.add(group.request_group_key);
+      if (group.request_number) snoozedRequestKeysRef.current.add(group.request_number);
       openRequest(group);
     } catch (error) {
       Alert.alert(error?.status === 409 ? 'Already Picked' : 'Unable to Pick', friendlyError(error));
@@ -849,6 +893,9 @@ export default function App() {
   const snoozeRequest = async (group) => {
     try {
       const result = await skipNotification(group.request_group_key);
+      if (group.request_group_key) snoozedRequestKeysRef.current.add(group.request_group_key);
+      if (group.request_number) snoozedRequestKeysRef.current.add(group.request_number);
+      await stopRequestRingtone();
       Alert.alert('Snoozed', `Remaining skips: ${result.skip_allowed_remaining ?? 0}`);
       loadNotifications();
     } catch (error) {
@@ -857,6 +904,9 @@ export default function App() {
   };
 
   const openRequest = (group) => {
+    if (group?.request_group_key) snoozedRequestKeysRef.current.add(group.request_group_key);
+    if (group?.request_number) snoozedRequestKeysRef.current.add(group.request_number);
+    stopRequestRingtone();
     setSelectedRequest(group);
     setRequestRows(
       (group.parts || []).map((part) => ({
@@ -865,9 +915,9 @@ export default function App() {
         partName: part.description || part.part_name || '-',
         requestedQty: numberValue(part.requested_qty),
         availableQty: numberValue(part.available_qty_at_request ?? part.available_qty),
-        loc: part.loc || part.location || '-',
-        purchaseAging: part.purchase_aging ?? '-',
-        salesAging: part.sales_aging ?? '-',
+        loc: part.loc || part.loc_at_request || part.location || '-',
+        purchaseAging: part.purchase_aging_days ?? part.purchase_aging ?? '-',
+        salesAging: part.sales_aging_days ?? part.sales_aging ?? '-',
         value: numberValue(part.part_value ?? part.value),
         acceptedQty: String(part.requested_qty ?? 0),
         remark: '',
@@ -1309,34 +1359,34 @@ function RequestScreen({ onBack, request, rows, updateRow, onSubmit, busy }) {
         <Text style={styles.requestHeaderSub}>{request?.requesting_branch || request?.requesting_dealer || '-'}</Text>
       </View>
       <ScrollView style={styles.flex} contentContainerStyle={styles.requestPartsContent} keyboardShouldPersistTaps="handled">
-        <View style={styles.tableHeader}>
-          <Text style={[styles.th, { flex: 2 }]}>Part Number</Text>
-          <Text style={styles.th}>Req</Text>
-          <Text style={styles.th}>Avail</Text>
-          <Text style={styles.th}>Accept</Text>
-          <Text style={styles.th}>LOC</Text>
-        </View>
         {rows.map((row) => {
           const accepted = numberValue(row.acceptedQty);
           const status = accepted === row.requestedQty ? 'ACCEPTED' : accepted === 0 ? 'REJECTED' : 'PARTIAL';
           return (
-            <View key={row.orderRequestId} style={styles.requestPartRow}>
-              <View style={styles.requestMainLine}>
-                <Text style={[styles.tdStrong, { flex: 2 }]}>{row.partNumber}</Text>
-                <Text style={styles.td}>{row.requestedQty}</Text>
-                <Text style={styles.td}>{row.availableQty}</Text>
-                <TextInput
-                  style={styles.qtyInput}
-                  value={row.acceptedQty}
-                  onChangeText={(v) => updateRow(row.orderRequestId, 'acceptedQty', v.replace(/[^0-9.]/g, ''))}
-                  keyboardType="decimal-pad"
-                />
-                <Text style={styles.td}>{row.loc}</Text>
+            <View key={row.orderRequestId} style={styles.requestPartCard}>
+              <Text style={styles.partNumberText}>{row.partNumber}</Text>
+              <Text style={styles.partDescriptionText}>{row.partName}</Text>
+              <Text style={styles.locValueText}>LOC  {row.loc}</Text>
+              <View style={styles.agingBlock}>
+                <Text style={styles.agingLabelText}>Purchase Aging  {row.purchaseAging}</Text>
+                <Text style={styles.agingLabelText}>Sales Aging  {row.salesAging}</Text>
               </View>
-              <View style={styles.requestExtra}>
-                <Text style={styles.requestExtraText}>
-                  {row.partName} • Purchase {row.purchaseAging} • Sales {row.salesAging}
-                </Text>
+              <View style={styles.qtyBlock}>
+                <View style={styles.qtyField}>
+                  <Text style={styles.qtyLabel}>Request Qty</Text>
+                  <Text style={styles.qtyReadOnly}>{row.requestedQty}</Text>
+                </View>
+                <View style={styles.qtyField}>
+                  <Text style={styles.qtyLabel}>Accepted Qty</Text>
+                  <TextInput
+                    style={styles.acceptedQtyInput}
+                    value={row.acceptedQty}
+                    onChangeText={(v) => updateRow(row.orderRequestId, 'acceptedQty', v.replace(/[^0-9.]/g, ''))}
+                    keyboardType="decimal-pad"
+                  />
+                </View>
+              </View>
+              <View style={styles.requestCardStatus}>
                 <StatusPill value={status} />
               </View>
               {status !== 'ACCEPTED' && (
@@ -1620,6 +1670,18 @@ const styles = StyleSheet.create({
   requestHeaderNo: { color: DARK, fontSize: 17, fontWeight: '900' },
   requestHeaderSub: { marginTop: 3, color: MUTED, fontSize: 11 },
   requestPartsContent: { padding: 10, paddingBottom: 30 },
+  requestPartCard: { marginTop: 10, padding: 14, backgroundColor: '#fff', borderWidth: 1, borderColor: BORDER, borderRadius: 14 },
+  partNumberText: { color: DARK, fontSize: 20, fontWeight: '900' },
+  partDescriptionText: { marginTop: 4, color: MUTED, fontSize: 12, fontWeight: '600' },
+  locValueText: { marginTop: 10, color: DARK, fontSize: 16, fontWeight: '800' },
+  agingBlock: { marginTop: 10 },
+  agingLabelText: { color: DARK, fontSize: 13, fontWeight: '700', marginTop: 3 },
+  qtyBlock: { marginTop: 12, flexDirection: 'row' },
+  qtyField: { flex: 1, marginRight: 8 },
+  qtyLabel: { color: MUTED, fontSize: 11, fontWeight: '800', marginBottom: 6 },
+  qtyReadOnly: { minHeight: 48, borderWidth: 1, borderColor: BORDER, borderRadius: 10, textAlign: 'center', textAlignVertical: 'center', color: DARK, fontSize: 18, fontWeight: '800', paddingTop: 12, backgroundColor: '#f4f7fb' },
+  acceptedQtyInput: { minHeight: 48, borderWidth: 2, borderColor: BLUE, borderRadius: 10, textAlign: 'center', color: DARK, fontSize: 22, fontWeight: '900', backgroundColor: '#fff' },
+  requestCardStatus: { marginTop: 10, alignItems: 'flex-start' },
   tableHeader: { flexDirection: 'row', paddingHorizontal: 8, paddingVertical: 9, backgroundColor: '#edf3ff', borderRadius: 10 },
   th: { flex: 1, color: DARK, fontSize: 9, fontWeight: '900', textAlign: 'center' },
   requestPartRow: { marginTop: 9, padding: 10, backgroundColor: '#fff', borderWidth: 1, borderColor: BORDER, borderRadius: 13 },
