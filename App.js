@@ -53,6 +53,7 @@ import {
   syncQueue,
 } from './src/services/offlineQueue';
 import {
+  dismissBranchRequestNotifications,
   dismissRequestNotification,
   initPushNotifications,
   registerForPushNotificationsAsync,
@@ -209,6 +210,7 @@ export default function App() {
   const notificationsRef = useRef([]);
   const incomingNotificationRef = useRef(null);
   const openRequestRef = useRef(null);
+  const pickRequestRef = useRef(null);
 
   useEffect(() => {
     screenRef.current = screen;
@@ -356,7 +358,7 @@ export default function App() {
 
   const showIncomingFromPush = useCallback(async (data, notification) => {
     if (!isBranchRequest(data)) return;
-    incomingNotificationRef.current = notification || null;
+    incomingNotificationRef.current = notification || incomingNotificationRef.current || null;
     let rows = notificationsRef.current || [];
     try {
       rows = (await getNotifications()) || rows;
@@ -366,31 +368,30 @@ export default function App() {
     setIncomingAlert(buildIncomingAlert(data, sessionRef.current, group));
   }, []);
 
-  const openExactRequestFromPush = useCallback(async (data) => {
-    setIncomingAlert(null);
-    incomingNotificationRef.current = null;
-    let rows = notificationsRef.current || [];
-    try {
-      rows = (await getNotifications()) || rows;
-      setNotifications(rows);
-    } catch (_e) {}
-    const group = findRequestGroup(rows, data);
-    if (group && openRequestRef.current) {
-      openRequestRef.current(group);
-      return;
-    }
-    setScreen('notifications');
-  }, []);
-
   const snoozeIncomingAlert = useCallback(async (data) => {
     const alert = data || incomingAlert || {};
     await dismissRequestNotification(incomingNotificationRef.current);
+    await dismissBranchRequestNotifications();
     incomingNotificationRef.current = null;
     if (alert.request_group_key) snoozedRequestKeysRef.current.add(alert.request_group_key);
     if (alert.request_number) snoozedRequestKeysRef.current.add(alert.request_number);
     await stopRequestRingtone();
     setIncomingAlert(null);
   }, [incomingAlert]);
+
+  const pickIncomingFromPush = useCallback(async (data) => {
+    let rows = notificationsRef.current || [];
+    try {
+      rows = (await getNotifications()) || rows;
+      setNotifications(rows);
+    } catch (_e) {}
+    const group = findRequestGroup(rows, data);
+    if (group && pickRequestRef.current) {
+      await pickRequestRef.current(group);
+      return;
+    }
+    setScreen('notifications');
+  }, []);
 
   // Register push listeners once per device session — not on every screen change.
   useEffect(() => {
@@ -402,7 +403,7 @@ export default function App() {
         if (data?.type === 'auto_perpetual') loadAutoTasksRef.current?.();
         if (isBranchRequest(data)) {
           const key = data.request_group_key || data.request_number;
-          if (key && !snoozedRequestKeysRef.current.has(key)) {
+          if (key && !snoozedRequestKeysRef.current.has(key) && AppState.currentState === 'active') {
             startRequestRingtone(key);
           }
           showIncomingFromPush(data, notification);
@@ -416,7 +417,17 @@ export default function App() {
           loadAutoTasksRef.current?.()?.finally?.(() => setScreen('auto'));
           return;
         }
-        openExactRequestFromPush(data);
+        if (isBranchRequest(data)) {
+          const key = data.request_group_key || data.request_number;
+          if (key && !snoozedRequestKeysRef.current.has(key)) {
+            startRequestRingtone(key);
+          }
+          showIncomingFromPush(data);
+          return;
+        }
+      },
+      onNotificationPicked: (data) => {
+        pickIncomingFromPush(data);
       },
       onNotificationSnoozed: (data) => {
         snoozeIncomingAlert(data);
@@ -430,7 +441,7 @@ export default function App() {
       })
       .catch(() => {});
     return () => teardown();
-  }, [session?.deviceId, showIncomingFromPush, openExactRequestFromPush, snoozeIncomingAlert]);
+  }, [session?.deviceId, showIncomingFromPush, pickIncomingFromPush, snoozeIncomingAlert]);
 
   useEffect(() => {
     const onAppState = (state) => {
@@ -963,6 +974,10 @@ export default function App() {
     setRequestBusy(true);
     try {
       await acceptNotification(group.request_group_key);
+      await dismissRequestNotification(incomingNotificationRef.current);
+      await dismissBranchRequestNotifications();
+      incomingNotificationRef.current = null;
+      setIncomingAlert(null);
       stopRequestRingtone();
       if (group.request_group_key) snoozedRequestKeysRef.current.add(group.request_group_key);
       if (group.request_number) snoozedRequestKeysRef.current.add(group.request_number);
@@ -981,6 +996,7 @@ export default function App() {
       if (group.request_group_key) snoozedRequestKeysRef.current.add(group.request_group_key);
       if (group.request_number) snoozedRequestKeysRef.current.add(group.request_number);
       await stopRequestRingtone();
+      await dismissBranchRequestNotifications();
       Alert.alert('Snoozed', `Remaining skips: ${result.skip_allowed_remaining ?? 0}`);
       loadNotifications();
     } catch (error) {
@@ -1013,6 +1029,7 @@ export default function App() {
 
   useEffect(() => {
     openRequestRef.current = openRequest;
+    pickRequestRef.current = pickRequest;
   });
 
   const submitRequestResponse = async () => {
@@ -1222,7 +1239,7 @@ export default function App() {
       <IncomingRequestPopup
         visible={Boolean(incomingAlert)}
         alert={incomingAlert}
-        onOpenRequest={() => openExactRequestFromPush(incomingAlert?.data || incomingAlert)}
+        onPick={() => pickIncomingFromPush(incomingAlert?.data || incomingAlert)}
         onSnooze={snoozeIncomingAlert}
       />
     </SafeAreaView>
