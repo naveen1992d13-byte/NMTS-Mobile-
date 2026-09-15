@@ -6,13 +6,14 @@ import * as Device from 'expo-device';
 import Constants from 'expo-constants';
 import { registerPushToken } from '../api';
 import {
-  ACTION_OPEN_REQUEST,
+  ACTION_PICK_REQUEST,
   ACTION_SNOOZE,
-  ANDROID_CHANNEL_ID,
+  ANDROID_CHANNEL_IDS,
   ANDROID_SOUND_NAME,
   REQUEST_CATEGORY_ID,
+  isBranchRequest,
+  isPickAction,
   isSnoozeAction,
-  shouldOpenExactRequest,
 } from '../utils/requestAlert';
 
 let responseListenerSub = null;
@@ -38,9 +39,8 @@ Notifications.setNotificationHandler({
   },
 });
 
-async function ensureAndroidChannel() {
-  if (Platform.OS !== 'android') return;
-  await Notifications.setNotificationChannelAsync(ANDROID_CHANNEL_ID, {
+function requestChannelOptions() {
+  return {
     name: 'Branch Stock Requests',
     importance: Notifications.AndroidImportance.MAX,
     vibrationPattern: [0, 250, 250, 250],
@@ -53,14 +53,22 @@ async function ensureAndroidChannel() {
       usage: Notifications.AndroidAudioUsage.NOTIFICATION_RINGTONE,
       contentType: Notifications.AndroidAudioContentType.SONIFICATION,
     },
-  });
+  };
+}
+
+async function ensureAndroidChannel() {
+  if (Platform.OS !== 'android') return;
+  const options = requestChannelOptions();
+  for (const channelId of ANDROID_CHANNEL_IDS) {
+    await Notifications.setNotificationChannelAsync(channelId, options);
+  }
 }
 
 async function ensureRequestCategory() {
   await Notifications.setNotificationCategoryAsync(REQUEST_CATEGORY_ID, [
     {
-      identifier: ACTION_OPEN_REQUEST,
-      buttonTitle: 'OPEN REQUEST',
+      identifier: ACTION_PICK_REQUEST,
+      buttonTitle: 'PICK',
       options: { opensAppToForeground: true },
     },
     {
@@ -130,6 +138,7 @@ export async function initPushNotifications({
   deviceId,
   onNotificationReceived,
   onNotificationTapped,
+  onNotificationPicked,
   onNotificationSnoozed,
   onTokenError,
 } = {}) {
@@ -165,9 +174,13 @@ export async function initPushNotifications({
       onNotificationSnoozed?.(data, response);
       return;
     }
-    if (shouldOpenExactRequest(response?.actionIdentifier)) {
-      onNotificationTapped?.(data, response);
+    if (isPickAction(response?.actionIdentifier)) {
+      onNotificationPicked?.(data, response);
+      return;
     }
+    // Notification body tap brings the app forward. Do not Pick and do not
+    // stop ringing — only Pick or Snooze stop the alert.
+    onNotificationTapped?.(data, response);
   };
 
   responseListenerSub = Notifications.addNotificationResponseReceivedListener((response) => {
@@ -179,7 +192,7 @@ export async function initPushNotifications({
   });
 
   // Do not replay getLastNotificationResponseAsync. A stale last-tap from a
-  // previous lock/unlock would Open Request and stop the looping ringtone.
+  // previous lock/unlock would Pick the request and stop the looping ringtone.
 
   initializedForDeviceId = key;
   teardownFn = function teardownPushNotifications() {
@@ -201,10 +214,23 @@ export async function dismissRequestNotification(notification) {
   }
 }
 
+export async function dismissBranchRequestNotifications() {
+  try {
+    const presented = await Notifications.getPresentedNotificationsAsync();
+    await Promise.all(
+      (presented || [])
+        .filter((item) => isBranchRequest(item?.request?.content?.data))
+        .map((item) => Notifications.dismissNotificationAsync(item.request.identifier).catch(() => {}))
+    );
+  } catch (error) {
+    console.log('[push] dismiss branch requests failed', error);
+  }
+}
+
 export const PUSH_MANUAL_TEST_NOTES = [
   'Foreground popup + custom ring while app is open',
   'Background shade + custom ring while minimized',
   'Killed-app delivery via FCM',
-  'OPEN REQUEST opens the exact request_group_key',
+  'PICK opens the exact request_group_key after pick lock',
   'SNOOZE dismisses only the current alert',
 ];

@@ -48,8 +48,8 @@ if (
 else fail('channel sound name mismatch');
 
 const push = read('src/services/pushNotifications.js');
-if (push.includes('getExpoPushTokenAsync') && push.includes('AndroidImportance.MAX') && push.includes('OPEN_REQUEST')) {
-  pass('token + MAX channel + OPEN REQUEST category present');
+if (push.includes('getExpoPushTokenAsync') && push.includes('AndroidImportance.MAX') && push.includes("buttonTitle: 'PICK'")) {
+  pass('token + MAX channel + PICK category present');
 } else fail('pushNotifications setup incomplete');
 
 if (push.includes('throw new Error') && !read('App.js').includes('registerForPushNotificationsAsync().catch(() => null)')) {
@@ -57,9 +57,9 @@ if (push.includes('throw new Error') && !read('App.js').includes('registerForPus
 } else fail('token errors still swallowed');
 
 const app = read('App.js');
-if (app.includes('openExactRequestFromPush') && app.includes('IncomingRequestPopup') && app.includes('request_group_key')) {
-  pass('OPEN REQUEST exact routing wired');
-} else fail('OPEN REQUEST routing missing');
+if (app.includes('pickIncomingFromPush') && app.includes('IncomingRequestPopup') && app.includes('request_group_key')) {
+  pass('PICK exact routing wired');
+} else fail('PICK routing missing');
 
 if (app.includes('snoozeIncomingAlert') && !read('src/components/IncomingRequestPopup.js').includes('skipNotification')) {
   pass('popup SNOOZE is local dismiss only');
@@ -67,6 +67,30 @@ if (app.includes('snoozeIncomingAlert') && !read('src/components/IncomingRequest
 if (read('src/components/IncomingRequestPopup.js').includes('Skip') || read('src/components/IncomingRequestPopup.js').includes('SKIP')) {
   fail('popup includes Skip');
 } else pass('popup has no Skip');
+if (
+  read('src/components/IncomingRequestPopup.js').includes('Request Number') &&
+  read('src/components/IncomingRequestPopup.js').includes('Requested Branch') &&
+  read('src/components/IncomingRequestPopup.js').includes('Total Items') &&
+  read('src/components/IncomingRequestPopup.js').includes('Total Quantity') &&
+  read('src/components/IncomingRequestPopup.js').includes('PICK') &&
+  read('src/components/IncomingRequestPopup.js').includes('SNOOZE') &&
+  !read('src/components/IncomingRequestPopup.js').includes('OPEN REQUEST') &&
+  !read('src/components/IncomingRequestPopup.js').includes('SLA remaining')
+) pass('popup shows only required fields and Pick/Snooze');
+else fail('popup fields/actions do not match requirement');
+if (
+  requestAlert.includes('sleeping-stock-requests-v3') &&
+  requestAlert.includes("sleeping-stock-requests'") &&
+  push.includes('ANDROID_CHANNEL_IDS') &&
+  push.includes('ANDROID_SOUND_NAME')
+) pass('request channels registered with custom sound');
+else fail('request channel/sound not aligned');
+if (read('plugins/withInsistentRequestNotifications.js').includes('FLAG_INSISTENT')) {
+  pass('insistent notification plugin present');
+} else fail('insistent notification plugin missing');
+if ((expo.plugins || []).includes('./plugins/withInsistentRequestNotifications.js')) {
+  pass('insistent plugin wired in app.json');
+} else fail('insistent plugin not wired in app.json');
 
 if (/Hyundai|HYUNDAI/.test(app) || /Hyundai|HYUNDAI/.test(read('src/components/IncomingRequestPopup.js'))) {
   fail('OEM Hyundai branding still present');

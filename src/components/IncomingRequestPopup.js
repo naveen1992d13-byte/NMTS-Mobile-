@@ -1,38 +1,31 @@
 import React from 'react';
 import { Modal, StyleSheet, Text, TouchableOpacity, View } from 'react-native';
-import { BORDER, CARD_SOLID, MUTED, NEON_CYAN, NEON_YELLOW, TEXT, WARNING } from '../theme';
+import { BORDER, CARD_SOLID, MUTED, NEON_CYAN, NEON_YELLOW, TEXT } from '../theme';
 
-export default function IncomingRequestPopup({ visible, alert, onOpenRequest, onSnooze }) {
+export default function IncomingRequestPopup({ visible, alert, onPick, onSnooze }) {
   if (!alert) return null;
   return (
     <Modal visible={visible} transparent animationType="fade" onRequestClose={onSnooze}>
       <View style={styles.backdrop}>
         <View style={styles.card}>
           <Text style={styles.kicker}>INCOMING REQUEST</Text>
-          <Text style={styles.requestNo}>{alert.request_number || '—'}</Text>
 
           <View style={styles.row}>
-            <Text style={styles.label}>From Dealer / Branch</Text>
-            <Text style={styles.value}>
-              {alert.from_dealer} / {alert.from_branch}
-            </Text>
+            <Text style={styles.label}>Request Number</Text>
+            <Text style={styles.value}>{alert.request_number || '—'}</Text>
           </View>
           <View style={styles.row}>
-            <Text style={styles.label}>To Dealer / Branch</Text>
-            <Text style={styles.value}>
-              {alert.to_dealer} / {alert.to_branch}
-            </Text>
+            <Text style={styles.label}>Requested Branch</Text>
+            <Text style={styles.value}>{alert.requested_branch || '—'}</Text>
           </View>
           <View style={styles.metaRow}>
             <View style={styles.metaBox}>
-              <Text style={styles.label}>Items / Qty</Text>
-              <Text style={styles.metaValue}>
-                {alert.total_items || 0} / {alert.total_qty || 0}
-              </Text>
+              <Text style={styles.label}>Total Items</Text>
+              <Text style={styles.metaValue}>{alert.total_items || 0}</Text>
             </View>
             <View style={styles.metaBox}>
-              <Text style={styles.label}>SLA remaining</Text>
-              <Text style={[styles.metaValue, styles.sla]}>{alert.sla_label || '—'}</Text>
+              <Text style={styles.label}>Total Quantity</Text>
+              <Text style={styles.metaValue}>{alert.total_qty || 0}</Text>
             </View>
           </View>
 
@@ -40,8 +33,8 @@ export default function IncomingRequestPopup({ visible, alert, onOpenRequest, on
             <TouchableOpacity style={styles.snooze} onPress={onSnooze}>
               <Text style={styles.snoozeText}>SNOOZE</Text>
             </TouchableOpacity>
-            <TouchableOpacity style={styles.open} onPress={onOpenRequest}>
-              <Text style={styles.openText}>OPEN REQUEST</Text>
+            <TouchableOpacity style={styles.pick} onPress={onPick}>
+              <Text style={styles.pickText}>PICK</Text>
             </TouchableOpacity>
           </View>
         </View>
@@ -71,15 +64,13 @@ const styles = StyleSheet.create({
     shadowRadius: 18,
     elevation: 12,
   },
-  kicker: { color: NEON_YELLOW, fontSize: 11, fontWeight: '900', letterSpacing: 1.4 },
-  requestNo: { marginTop: 8, marginBottom: 16, color: TEXT, fontSize: 22, fontWeight: '900' },
+  kicker: { color: NEON_YELLOW, fontSize: 11, fontWeight: '900', letterSpacing: 1.4, marginBottom: 12 },
   row: { marginBottom: 12 },
   label: { color: MUTED, fontSize: 11, fontWeight: '800' },
   value: { marginTop: 4, color: TEXT, fontSize: 14, fontWeight: '800' },
   metaRow: { flexDirection: 'row', marginTop: 4, marginBottom: 18 },
   metaBox: { flex: 1 },
   metaValue: { marginTop: 4, color: TEXT, fontSize: 16, fontWeight: '900' },
-  sla: { color: WARNING },
   actions: { flexDirection: 'row' },
   snooze: {
     flex: 1,
@@ -92,7 +83,7 @@ const styles = StyleSheet.create({
     justifyContent: 'center',
   },
   snoozeText: { color: MUTED, fontWeight: '900' },
-  open: {
+  pick: {
     flex: 1.4,
     minHeight: 48,
     borderRadius: 14,
@@ -100,5 +91,5 @@ const styles = StyleSheet.create({
     alignItems: 'center',
     justifyContent: 'center',
   },
-  openText: { color: '#041018', fontWeight: '900' },
+  pickText: { color: '#041018', fontWeight: '900' },
 });

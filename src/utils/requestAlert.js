@@ -1,7 +1,10 @@
 export const ANDROID_CHANNEL_ID = 'sleeping-stock-requests-v3';
+export const ANDROID_LEGACY_CHANNEL_ID = 'sleeping-stock-requests';
+export const ANDROID_CHANNEL_IDS = [ANDROID_CHANNEL_ID, ANDROID_LEGACY_CHANNEL_ID];
 export const ANDROID_SOUND_FILE = 'sleeping_stock_alert_2_rising_dispatch.wav';
 export const ANDROID_SOUND_NAME = ANDROID_SOUND_FILE;
 export const REQUEST_CATEGORY_ID = 'branch-request';
+export const ACTION_PICK_REQUEST = 'PICK';
 export const ACTION_OPEN_REQUEST = 'OPEN_REQUEST';
 export const ACTION_SNOOZE = 'SNOOZE';
 export const DEFAULT_NOTIFICATION_ACTION = 'expo.modules.notifications.actions.DEFAULT';
@@ -53,11 +56,17 @@ export function findRequestGroup(rows, data) {
 export function buildIncomingAlert(data, session, group) {
   const payload = data || {};
   const row = group || {};
+  const requestedBranch =
+    payload.requesting_branch ||
+    payload.requested_branch ||
+    row.requesting_branch ||
+    '—';
   return {
     request_group_key: payload.request_group_key || row.request_group_key || '',
     request_number: payload.request_number || row.request_number || '—',
+    requested_branch: requestedBranch,
     from_dealer: payload.requesting_dealer || row.requesting_dealer || '—',
-    from_branch: payload.requesting_branch || row.requesting_branch || '—',
+    from_branch: requestedBranch,
     to_dealer: payload.supplying_dealer || row.supplying_dealer || session?.dealerName || '—',
     to_branch: payload.supplying_branch || row.supplying_branch || session?.branch || '—',
     total_items: payload.total_items ?? row.total_items ?? 0,
@@ -75,15 +84,19 @@ export function isSnoozeAction(actionIdentifier) {
   return id === ACTION_SNOOZE || id.endsWith(ACTION_SNOOZE);
 }
 
-export function shouldOpenExactRequest(actionIdentifier) {
+export function isPickAction(actionIdentifier) {
   const id = String(actionIdentifier || '');
   if (isSnoozeAction(id)) return false;
   return (
-    !id ||
-    id === DEFAULT_NOTIFICATION_ACTION ||
+    id === ACTION_PICK_REQUEST ||
+    id.endsWith(ACTION_PICK_REQUEST) ||
     id === ACTION_OPEN_REQUEST ||
     id.endsWith(ACTION_OPEN_REQUEST)
   );
+}
+
+export function shouldOpenExactRequest(actionIdentifier) {
+  return isPickAction(actionIdentifier);
 }
 
 export const PUSH_SOUND_ASSET = './assets/sounds/sleeping_stock_alert_2_rising_dispatch.wav';
