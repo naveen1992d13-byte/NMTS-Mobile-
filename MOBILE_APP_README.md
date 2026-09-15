@@ -9,9 +9,10 @@ Mobile" page.
 | # | File | Field | Replace with |
 |---|---|---|---|
 | 1 | `app.json` | `expo.extra.apiBaseUrl` (line ~18) | Your real backend URL, e.g. `https://nmts.yourdomain.com/api` |
-| 2 | `app.json` | `expo.extra.eas.projectId` (line ~20, currently `"REPLACE_WITH_YOUR_EAS_PROJECT_ID"`) | Run `eas init` in this folder — it fills this in automatically |
-| 3 | `src/config/env.js` | `fallbackApiBaseUrl` (line 10) | Optional — only used if #1 and the `EXPO_PUBLIC_API_BASE_URL` env var are both unset; keep in sync with #1 |
-| 4 | Signing key | *(no file — generated via CLI)* | Run `eas credentials` → Android → "Set Up a New Keystore" (see §8) before your first `production` build |
+| 2 | `app.json` | `expo.extra.eas.projectId` | Already set to the Sleeping Stock EAS project |
+| 3 | `google-services.json` | Firebase Android app for package `in.sleepingstock.mobile` | Already added from the Firebase Console download. |
+| 4 | `assets/sounds/sleeping_stock_alert_2_rising_dispatch.wav` | Request alert sound | Already in the repo. Do not rename. The `expo-notifications` plugin `sounds` array and Android channel already point at this file. |
+| 5 | Signing key | *(no file — generated via CLI)* | Run `eas credentials` → Android → "Set Up a New Keystore" (see §8) before your first `production` build |
 
 Everything else in this project (API routes, screens, offline queue, push
 notification wiring) is complete — no other placeholders, mock data, or
