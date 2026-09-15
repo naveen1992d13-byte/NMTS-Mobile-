@@ -8,7 +8,7 @@ import {
   TouchableOpacity,
   View,
 } from 'react-native';
-import { BLUE, BORDER, DANGER, DARK, MUTED, SUCCESS, WARNING } from '../theme';
+import { BLUE, BORDER, CARD_SOLID, DANGER, DARK, MUTED, SUCCESS, WARNING } from '../theme';
 
 export function Header({ title, onBack, action, onAction }) {
   return (
@@ -32,7 +32,7 @@ export function Field({ label, ...props }) {
   return (
     <View style={{ marginBottom: 14 }}>
       <Text style={styles.label}>{label}</Text>
-      <TextInput style={styles.input} placeholderTextColor="#8793a6" {...props} />
+      <TextInput style={styles.input} placeholderTextColor={MUTED} {...props} />
     </View>
   );
 }
@@ -44,7 +44,7 @@ export function PrimaryButton({ title, onPress, busy, disabled, compact }) {
       onPress={onPress}
       disabled={busy || disabled}
     >
-      {busy ? <ActivityIndicator color="#fff" /> : <Text style={styles.primaryText}>{title}</Text>}
+      {busy ? <ActivityIndicator color="#041018" /> : <Text style={styles.primaryText}>{title}</Text>}
     </TouchableOpacity>
   );
 }
@@ -161,7 +161,7 @@ const styles = StyleSheet.create({
   header: {
     height: 58,
     paddingHorizontal: 16,
-    backgroundColor: '#fff',
+    backgroundColor: CARD_SOLID,
     borderBottomWidth: 1,
     borderBottomColor: BORDER,
     flexDirection: 'row',
@@ -178,7 +178,7 @@ const styles = StyleSheet.create({
     borderColor: BORDER,
     borderRadius: 13,
     paddingHorizontal: 14,
-    backgroundColor: '#fbfcff',
+    backgroundColor: 'rgba(8, 16, 28, 0.92)',
     color: DARK,
   },
   primaryButton: {
@@ -189,7 +189,7 @@ const styles = StyleSheet.create({
     alignItems: 'center',
     justifyContent: 'center',
   },
-  primaryText: { color: '#fff', fontWeight: '900' },
+  primaryText: { color: '#041018', fontWeight: '900' },
   secondaryButton: {
     flex: 1,
     minHeight: 50,
@@ -211,10 +211,10 @@ const styles = StyleSheet.create({
     alignItems: 'center',
     justifyContent: 'center',
   },
-  squareButtonText: { color: '#fff', fontSize: 20, fontWeight: '900' },
+  squareButtonText: { color: '#041018', fontSize: 20, fontWeight: '900' },
   empty: {
     padding: 24,
-    backgroundColor: '#fff',
+    backgroundColor: CARD_SOLID,
     borderWidth: 1,
     borderColor: BORDER,
     borderRadius: 16,
@@ -226,18 +226,18 @@ const styles = StyleSheet.create({
   syncBanner: {
     paddingVertical: 6,
     paddingHorizontal: 12,
-    backgroundColor: '#edf3ff',
+    backgroundColor: 'rgba(62, 224, 255, 0.12)',
     borderBottomWidth: 1,
     borderBottomColor: BORDER,
     alignItems: 'center',
   },
-  syncBannerOk: { backgroundColor: '#e8f8ee' },
+  syncBannerOk: { backgroundColor: 'rgba(61, 255, 138, 0.12)' },
   syncBannerText: { color: BLUE, fontSize: 12, fontWeight: '800' },
   syncBannerTextOk: { color: SUCCESS },
   stockCard: {
     marginBottom: 10,
     padding: 14,
-    backgroundColor: '#fff',
+    backgroundColor: CARD_SOLID,
     borderWidth: 1,
     borderColor: BORDER,
     borderRadius: 15,
@@ -255,11 +255,11 @@ const styles = StyleSheet.create({
     paddingHorizontal: 10,
     paddingVertical: 8,
     borderRadius: 10,
-    backgroundColor: '#f5f7fb',
+    backgroundColor: 'rgba(8, 16, 28, 0.92)',
     borderWidth: 1,
     borderColor: BORDER,
   },
-  agingBadgeHot: { backgroundColor: '#fff1f1', borderColor: '#f0b4b4' },
+  agingBadgeHot: { backgroundColor: 'rgba(255, 93, 108, 0.12)', borderColor: DANGER },
   agingLabel: { color: MUTED, fontSize: 9, fontWeight: '700' },
   agingLabelHot: { color: DANGER },
   agingValue: { marginTop: 3, color: DARK, fontSize: 13, fontWeight: '900' },
@@ -273,9 +273,9 @@ const styles = StyleSheet.create({
     borderRadius: 10,
     borderWidth: 1,
     borderColor: BORDER,
-    backgroundColor: '#f5f7fb',
+    backgroundColor: 'rgba(8, 16, 28, 0.92)',
   },
-  thresholdChipActive: { backgroundColor: '#edf3ff', borderColor: BLUE },
+  thresholdChipActive: { backgroundColor: 'rgba(62, 224, 255, 0.14)', borderColor: BLUE },
   thresholdText: { color: MUTED, fontWeight: '800', fontSize: 12 },
   thresholdTextActive: { color: BLUE },
   agingHint: { marginTop: 8, color: MUTED, fontSize: 11 },

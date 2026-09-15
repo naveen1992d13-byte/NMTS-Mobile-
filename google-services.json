@@ -1,0 +1,29 @@
+{
+  "project_info": {
+    "project_number": "295465839675",
+    "project_id": "nmts-mobile",
+    "storage_bucket": "nmts-mobile.firebasestorage.app"
+  },
+  "client": [
+    {
+      "client_info": {
+        "mobilesdk_app_id": "1:295465839675:android:f8dd45e503784f2da0c01e",
+        "android_client_info": {
+          "package_name": "in.sleepingstock.mobile"
+        }
+      },
+      "oauth_client": [],
+      "api_key": [
+        {
+          "current_key": "AIzaSyC79Wh6YR9-mgDOxksNHYGgzVvV6LjeBXg"
+        }
+      ],
+      "services": {
+        "appinvite_service": {
+          "other_platform_oauth_client": []
+        }
+      }
+    }
+  ],
+  "configuration_version": "1"
+}

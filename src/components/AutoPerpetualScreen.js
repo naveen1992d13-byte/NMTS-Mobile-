@@ -12,7 +12,7 @@ import {
   TouchableOpacity,
   View,
 } from 'react-native';
-import { BLUE, BORDER, DARK, MUTED, SUCCESS, WARNING } from '../theme';
+import { BLUE, BORDER, CARD_SOLID, DARK, MUTED, SUCCESS, WARNING } from '../theme';
 import { calculateVerification, numberValue } from '../utils/stockHelpers';
 import { Empty, Header, PrimaryButton, SecondaryButton, StatusPill, SyncStatusBanner } from './ui';
 
@@ -122,7 +122,7 @@ function VerifyModal({
             onChangeText={(v) => setPhysicalQty(v.replace(/[^0-9.]/g, ''))}
             placeholder="Physical Qty"
             keyboardType="decimal-pad"
-            placeholderTextColor="#8793a6"
+            placeholderTextColor={MUTED}
             autoFocus
           />
           <View style={styles.twoCol}>
@@ -132,7 +132,7 @@ function VerifyModal({
               onChangeText={(v) => setDamageQty(v.replace(/[^0-9.]/g, ''))}
               placeholder="Damage Qty"
               keyboardType="decimal-pad"
-              placeholderTextColor="#8793a6"
+              placeholderTextColor={MUTED}
             />
             <TextInput
               style={[styles.input, styles.half, { marginRight: 0 }]}
@@ -140,7 +140,7 @@ function VerifyModal({
               onChangeText={setLocation}
               placeholder="Physical LOC"
               autoCapitalize="characters"
-              placeholderTextColor="#8793a6"
+              placeholderTextColor={MUTED}
             />
           </View>
           <TextInput
@@ -148,7 +148,7 @@ function VerifyModal({
             value={remark}
             onChangeText={setRemark}
             placeholder="Remark (optional)"
-            placeholderTextColor="#8793a6"
+            placeholderTextColor={MUTED}
           />
 
           <View style={styles.modalActions}>
@@ -297,7 +297,7 @@ const styles = StyleSheet.create({
   sectionLabel: { marginBottom: 10, color: DARK, fontSize: 11, fontWeight: '900' },
   sessionCard: {
     padding: 14,
-    backgroundColor: '#fff',
+    backgroundColor: CARD_SOLID,
     borderWidth: 1,
     borderColor: BORDER,
     borderRadius: 16,
@@ -308,7 +308,7 @@ const styles = StyleSheet.create({
   progressWrap: {
     marginBottom: 14,
     padding: 14,
-    backgroundColor: '#fff',
+    backgroundColor: CARD_SOLID,
     borderWidth: 1,
     borderColor: BORDER,
     borderRadius: 16,
@@ -316,22 +316,22 @@ const styles = StyleSheet.create({
   progressHeader: { flexDirection: 'row', justifyContent: 'space-between', marginBottom: 10 },
   progressText: { color: DARK, fontWeight: '900', fontSize: 13 },
   progressPending: { color: MUTED, fontWeight: '800', fontSize: 12 },
-  progressTrack: { height: 8, borderRadius: 8, backgroundColor: '#e8eef8', overflow: 'hidden' },
+  progressTrack: { height: 8, borderRadius: 8, backgroundColor: 'rgba(62, 224, 255, 0.16)', overflow: 'hidden' },
   progressFill: { height: 8, backgroundColor: SUCCESS },
   taskCard: {
     marginBottom: 10,
     padding: 14,
-    backgroundColor: '#fff',
+    backgroundColor: CARD_SOLID,
     borderWidth: 1,
     borderColor: BORDER,
     borderRadius: 15,
   },
-  taskCardMatched: { borderColor: '#9fd4b2', backgroundColor: '#f3fbf6' },
-  taskCardWarn: { borderColor: '#f0d19a', backgroundColor: '#fffaf0' },
+  taskCardMatched: { borderColor: SUCCESS, backgroundColor: 'rgba(61, 255, 138, 0.10)' },
+  taskCardWarn: { borderColor: WARNING, backgroundColor: 'rgba(240, 193, 77, 0.10)' },
   taskTopRow: { flexDirection: 'row', justifyContent: 'space-between', alignItems: 'center' },
   partNo: { color: DARK, fontSize: 14, fontWeight: '900' },
   partName: { marginTop: 3, color: MUTED, fontSize: 11 },
-  meta: { marginTop: 7, color: '#4b5563', fontSize: 11 },
+  meta: { marginTop: 7, color: MUTED, fontSize: 11 },
   verifiedMeta: { marginTop: 10, flexDirection: 'row', justifyContent: 'space-between', alignItems: 'center' },
   verifiedLine: { color: SUCCESS, fontSize: 12, fontWeight: '800' },
   stickyBar: {
@@ -341,14 +341,14 @@ const styles = StyleSheet.create({
     bottom: 0,
     padding: 12,
     paddingBottom: Platform.OS === 'ios' ? 22 : 12,
-    backgroundColor: '#fff',
+    backgroundColor: CARD_SOLID,
     borderTopWidth: 1,
     borderTopColor: BORDER,
   },
   modalRoot: { flex: 1, justifyContent: 'flex-end' },
   modalBackdrop: { ...StyleSheet.absoluteFillObject, backgroundColor: 'rgba(15,23,42,0.45)' },
   modalSheet: {
-    backgroundColor: '#fff',
+    backgroundColor: CARD_SOLID,
     borderTopLeftRadius: 22,
     borderTopRightRadius: 22,
     padding: 18,
@@ -366,7 +366,7 @@ const styles = StyleSheet.create({
     borderWidth: 1,
     borderColor: BORDER,
     borderRadius: 12,
-    backgroundColor: '#fafcff',
+    backgroundColor: 'rgba(8, 16, 28, 0.92)',
     color: DARK,
   },
   twoCol: { flexDirection: 'row' },

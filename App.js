@@ -52,6 +52,7 @@ import {
   syncQueue,
 } from './src/services/offlineQueue';
 import {
+  dismissRequestNotification,
   initPushNotifications,
   registerForPushNotificationsAsync,
 } from './src/services/pushNotifications';
@@ -63,11 +64,13 @@ import {
   calculateVerification,
   numberValue,
 } from './src/utils/stockHelpers';
-import { BLUE, BG, BORDER, DANGER, DARK, MUTED, SUCCESS } from './src/theme';
+import { BLUE, BG, BORDER, CARD_SOLID, DANGER, DARK, MUTED, NEON_BLUE, NEON_CYAN, NEON_GREEN, NEON_YELLOW, SUCCESS, WARNING } from './src/theme';
 import AutoPerpetualScreen from './src/components/AutoPerpetualScreen';
 import StockAvailabilityScreen from './src/components/StockAvailabilityScreen';
 import MultiPartSearchScreen from './src/components/MultiPartSearchScreen';
 import MandatoryUpdateScreen from './src/components/MandatoryUpdateScreen';
+import IncomingRequestPopup from './src/components/IncomingRequestPopup';
+import { buildIncomingAlert, findRequestGroup, formatSlaRemaining, isBranchRequest } from './src/utils/requestAlert';
 import {
   Empty,
   Field,
@@ -146,6 +149,7 @@ export default function App() {
 
   const [notifications, setNotifications] = useState([]);
   const [notificationsBusy, setNotificationsBusy] = useState(false);
+  const [incomingAlert, setIncomingAlert] = useState(null);
   const [selectedRequest, setSelectedRequest] = useState(null);
   const [requestRows, setRequestRows] = useState([]);
   const [requestBusy, setRequestBusy] = useState(false);
@@ -192,7 +196,10 @@ export default function App() {
   const loadAutoTasksRef = useRef(null);
   const loadNotificationsRef = useRef(null);
   const snoozedRequestKeysRef = useRef(new Set());
+  const sessionRef = useRef(null);
   const notificationsRef = useRef([]);
+  const incomingNotificationRef = useRef(null);
+  const openRequestRef = useRef(null);
 
   useEffect(() => {
     screenRef.current = screen;
@@ -326,19 +333,70 @@ export default function App() {
     loadNotificationsRef.current = loadNotifications;
   }, [loadAutoTasks, loadNotifications]);
 
+  useEffect(() => {
+    sessionRef.current = session;
+  }, [session]);
+
+  useEffect(() => {
+    notificationsRef.current = notifications;
+  }, [notifications]);
+
+  useEffect(() => {
+    if (session?.deviceId) loadNotifications();
+  }, [session?.deviceId, loadNotifications]);
+
+  const showIncomingFromPush = useCallback(async (data, notification) => {
+    if (!isBranchRequest(data)) return;
+    incomingNotificationRef.current = notification || null;
+    let rows = notificationsRef.current || [];
+    try {
+      rows = (await getNotifications()) || rows;
+      setNotifications(rows);
+    } catch (_e) {}
+    const group = findRequestGroup(rows, data);
+    setIncomingAlert(buildIncomingAlert(data, sessionRef.current, group));
+  }, []);
+
+  const openExactRequestFromPush = useCallback(async (data) => {
+    setIncomingAlert(null);
+    incomingNotificationRef.current = null;
+    let rows = notificationsRef.current || [];
+    try {
+      rows = (await getNotifications()) || rows;
+      setNotifications(rows);
+    } catch (_e) {}
+    const group = findRequestGroup(rows, data);
+    if (group && openRequestRef.current) {
+      openRequestRef.current(group);
+      return;
+    }
+    setScreen('notifications');
+  }, []);
+
+  const snoozeIncomingAlert = useCallback(async (data) => {
+    const alert = data || incomingAlert || {};
+    await dismissRequestNotification(incomingNotificationRef.current);
+    incomingNotificationRef.current = null;
+    if (alert.request_group_key) snoozedRequestKeysRef.current.add(alert.request_group_key);
+    if (alert.request_number) snoozedRequestKeysRef.current.add(alert.request_number);
+    await stopRequestRingtone();
+    setIncomingAlert(null);
+  }, [incomingAlert]);
+
   // Register push listeners once per device session — not on every screen change.
   useEffect(() => {
     if (!session?.deviceId) return undefined;
     let teardown = () => {};
     initPushNotifications({
       deviceId: session.deviceId,
-      onNotificationReceived: (data) => {
+      onNotificationReceived: (data, notification) => {
         if (data?.type === 'auto_perpetual') loadAutoTasksRef.current?.();
-        if (data?.type === 'branch_request' || data?.screen === 'request') {
+        if (isBranchRequest(data)) {
           const key = data.request_group_key || data.request_number;
           if (key && !snoozedRequestKeysRef.current.has(key)) {
             startRequestRingtone(key);
           }
+          showIncomingFromPush(data, notification);
           loadNotificationsRef.current?.();
           return;
         }
@@ -349,12 +407,13 @@ export default function App() {
           loadAutoTasksRef.current?.()?.finally?.(() => setScreen('auto'));
           return;
         }
-        const key = data?.request_group_key || data?.request_number;
-        if (key && !snoozedRequestKeysRef.current.has(key)) {
-          startRequestRingtone(key);
-        }
-        setScreen('notifications');
-        loadNotificationsRef.current?.();
+        openExactRequestFromPush(data);
+      },
+      onNotificationSnoozed: (data) => {
+        snoozeIncomingAlert(data);
+      },
+      onTokenError: (error) => {
+        console.log('[push] token error', error);
       },
     })
       .then((fn) => {
@@ -362,7 +421,7 @@ export default function App() {
       })
       .catch(() => {});
     return () => teardown();
-  }, [session?.deviceId]);
+  }, [session?.deviceId, showIncomingFromPush, openExactRequestFromPush, snoozeIncomingAlert]);
 
   useEffect(() => {
     const onAppState = (state) => {
@@ -457,7 +516,16 @@ export default function App() {
     }
     setPairingBusy(true);
     try {
-      const pushToken = await registerForPushNotificationsAsync().catch(() => null);
+      let pushToken = null;
+      try {
+        pushToken = await registerForPushNotificationsAsync();
+      } catch (pushError) {
+        console.log('[push] pairing token skipped', pushError);
+        Alert.alert(
+          'Push setup',
+          pushError?.message || 'Could not create an Expo push token. Pairing will continue; request alerts need Firebase/FCM on this APK.'
+        );
+      }
       const result = await verifyPairing({
         mobileUserId: qrMobileUserId?.trim()?.toUpperCase() || null,
         pairingType,
@@ -926,6 +994,10 @@ export default function App() {
     setScreen('request');
   };
 
+  useEffect(() => {
+    openRequestRef.current = openRequest;
+  });
+
   const submitRequestResponse = async () => {
     for (const row of requestRows) {
       const qty = numberValue(row.acceptedQty);
@@ -965,7 +1037,7 @@ export default function App() {
   if (mandatoryUpdate) {
     return (
       <SafeAreaView style={styles.safeArea}>
-        <StatusBar barStyle="dark-content" backgroundColor="#ffffff" />
+        <StatusBar barStyle="light-content" backgroundColor={BG} />
         <MandatoryUpdateScreen versionInfo={mandatoryUpdate} currentVersionCode={CURRENT_VERSION_CODE} />
       </SafeAreaView>
     );
@@ -989,7 +1061,7 @@ export default function App() {
 
   return (
     <SafeAreaView style={styles.safeArea}>
-      <StatusBar barStyle="dark-content" backgroundColor="#ffffff" />
+      <StatusBar barStyle="light-content" backgroundColor={BG} />
       {isOffline && (
         <View style={styles.offline}>
           <Text style={styles.offlineText}>Offline — uploads will sync automatically</Text>
@@ -1009,7 +1081,13 @@ export default function App() {
         />
       )}
       {screen === 'home' && (
-        <HomeScreen session={session} pendingCount={pendingCount} navigate={setScreen} logout={logout} />
+          <HomeScreen
+            session={session}
+            pendingCount={pendingCount}
+            notificationCount={notifications.length}
+            navigate={setScreen}
+            logout={logout}
+          />
       )}
       {screen === 'auto' && (
         <AutoPerpetualScreen
@@ -1124,6 +1202,12 @@ export default function App() {
             busy={ocrBusy}
           />
         ))}
+      <IncomingRequestPopup
+        visible={Boolean(incomingAlert)}
+        alert={incomingAlert}
+        onOpenRequest={() => openExactRequestFromPush(incomingAlert?.data || incomingAlert)}
+        onSnooze={snoozeIncomingAlert}
+      />
     </SafeAreaView>
   );
 }
@@ -1136,7 +1220,7 @@ function PairScreen(props) {
       keyboardVerticalOffset={Platform.OS === 'ios' ? 0 : 18}
     >
       <ScrollView contentContainerStyle={styles.pairPage} keyboardShouldPersistTaps="handled" keyboardDismissMode="interactive">
-        <Image source={require('./assets/sleeping-stock-logo-transparent.png')} style={styles.brandLogo} resizeMode="contain" />
+        <Image source={require('./assets/sleeping-stock-logo.png')} style={styles.brandLogo} resizeMode="contain" />
         <Text style={styles.appTitle}>Sleeping Stock Mobile</Text>
         <Text style={styles.appSub}>PAIR THIS DEVICE</Text>
         <View style={styles.card}>
@@ -1159,28 +1243,61 @@ function PairScreen(props) {
   );
 }
 
-function HomeScreen({ session, pendingCount, navigate, logout }) {
+function HomeScreen({ session, pendingCount, notificationCount, navigate, logout }) {
   return (
     <ScrollView contentContainerStyle={styles.homePage}>
       <View style={styles.homeHeader}>
-        <View>
-          <Text style={styles.hello}>WELCOME</Text>
+        <View style={styles.flex}>
+          <Text style={styles.hello}>WELCOME BACK,</Text>
           <Text style={styles.homeName}>{session?.name || 'Mobile User'}</Text>
+          <Text style={styles.homeAppLabel}>NMTS / Sleeping Stock</Text>
         </View>
-        <TouchableOpacity onPress={logout}>
+        <TouchableOpacity style={styles.headerIconButton} onPress={() => navigate('notifications')}>
+          <Text style={styles.headerIcon}>🔔</Text>
+          {notificationCount > 0 ? (
+            <View style={styles.headerDot} />
+          ) : null}
+        </TouchableOpacity>
+        <TouchableOpacity style={styles.logoutChip} onPress={logout}>
           <Text style={styles.logout}>Logout</Text>
         </TouchableOpacity>
       </View>
       <View style={styles.branchCard}>
+        <Text style={styles.branchKicker}>PAIRED LOCATION</Text>
         <Text style={styles.branchTitle}>{session?.branch || 'Paired Branch'}</Text>
         <Text style={styles.branchSub}>
-          {session?.dealerName || ''} {session?.brandName ? `• ${session.brandName}` : ''}
+          {[session?.dealerName, session?.brandName].filter(Boolean).join(' • ') || 'Multi-brand dealer network'}
         </Text>
       </View>
-      <MenuButton icon="🔔" title="Notifications" subtitle="Pick and process parts requests" onPress={() => navigate('notifications')} />
-      <MenuButton icon="✓" title="Physical Perpetual" subtitle="Manual / scan stock verification (MOPS)" onPress={() => navigate('verification')} />
-      <MenuButton icon="⚡" title="Auto Perpetual" subtitle="Today's assigned verification tasks (AOPS)" onPress={() => navigate('auto')} />
-      <MenuButton icon="⌕" title="Stock Availability" subtitle="Product Hub style search + multiple parts" onPress={() => navigate('search')} />
+      <MenuButton
+        icon="🔔"
+        accent={NEON_YELLOW}
+        title="Notifications"
+        subtitle="Pick and process parts requests"
+        badge={notificationCount > 0 ? `${notificationCount} New` : null}
+        onPress={() => navigate('notifications')}
+      />
+      <MenuButton
+        icon="✓"
+        accent={NEON_GREEN}
+        title="Physical Perpetual"
+        subtitle="Manual / scan stock verification (MOPS)"
+        onPress={() => navigate('verification')}
+      />
+      <MenuButton
+        icon="⚡"
+        accent={NEON_CYAN}
+        title="Auto Perpetual"
+        subtitle="Today's assigned verification tasks (AOPS)"
+        onPress={() => navigate('auto')}
+      />
+      <MenuButton
+        icon="⌕"
+        accent={NEON_BLUE}
+        title="Stock Availability"
+        subtitle="Product Hub style search + multiple parts"
+        onPress={() => navigate('search')}
+      />
       {pendingCount > 0 && (
         <View style={styles.pendingCard}>
           <Text style={styles.pendingText}>{pendingCount} verification record(s) pending upload</Text>
@@ -1237,7 +1354,7 @@ function VerificationScreen(props) {
                 value={props.selectedPart.partName}
                 onChangeText={(value) => props.setSelectedPart((current) => ({ ...current, partName: value }))}
                 placeholder="Part Name / Description"
-                placeholderTextColor="#8793a6"
+                placeholderTextColor={MUTED}
               />
             ) : (
               <Text style={styles.partName}>{props.selectedPart.partName}</Text>
@@ -1263,7 +1380,7 @@ function VerificationScreen(props) {
             value={props.input}
             onChangeText={(v) => props.setInput(cleanPartNumber(v))}
             placeholder="Enter Part Number"
-            placeholderTextColor="#8793a6"
+            placeholderTextColor={MUTED}
             autoCapitalize="characters"
           />
           <SquareButton title="⌕" onPress={props.onLookup} />
@@ -1278,7 +1395,7 @@ function VerificationScreen(props) {
                 onChangeText={(v) => props.setPhysicalQty(v.replace(/[^0-9.]/g, ''))}
                 placeholder="Physical Qty"
                 keyboardType="decimal-pad"
-                placeholderTextColor="#8793a6"
+                placeholderTextColor={MUTED}
               />
               <TextInput
                 style={[styles.bottomInput, styles.halfInput]}
@@ -1286,7 +1403,7 @@ function VerificationScreen(props) {
                 onChangeText={props.setPhysicalLocation}
                 placeholder="Physical LOC"
                 autoCapitalize="characters"
-                placeholderTextColor="#8793a6"
+                placeholderTextColor={MUTED}
               />
             </View>
             <TextInput
@@ -1294,7 +1411,7 @@ function VerificationScreen(props) {
               value={props.remark}
               onChangeText={props.setRemark}
               placeholder="Remark (optional)"
-              placeholderTextColor="#8793a6"
+              placeholderTextColor={MUTED}
             />
             <TextInput
               style={styles.bottomInput}
@@ -1302,7 +1419,7 @@ function VerificationScreen(props) {
               onChangeText={(v) => props.setDamageQty(v.replace(/[^0-9.]/g, ''))}
               placeholder="Damage Qty (optional)"
               keyboardType="decimal-pad"
-              placeholderTextColor="#8793a6"
+              placeholderTextColor={MUTED}
             />
           </>
         )}
@@ -1331,9 +1448,10 @@ function NotificationsScreen({ onBack, rows, busy, refresh, openRequest, pickReq
               <Text style={styles.requestNo}>{item.request_number}</Text>
               <Text style={styles.newBadge}>NEW</Text>
             </View>
-            <Text style={styles.requestFrom}>From: {item.requesting_branch || item.requesting_dealer || '-'}</Text>
+            <Text style={styles.requestFrom}>From: {item.requesting_dealer || '-'} / {item.requesting_branch || '-'}</Text>
+            <Text style={styles.requestFrom}>To: {item.supplying_dealer || '-'} / {item.supplying_branch || '-'}</Text>
             <Text style={styles.requestMeta}>
-              Items: {item.total_items || 0}    Qty: {item.total_quantity || 0}
+              Items: {item.total_items || 0}    Qty: {item.total_quantity || 0}    SLA: {formatSlaRemaining(item.response_deadline)}
             </Text>
             <View style={styles.requestActions}>
               <TouchableOpacity style={styles.snoozeButton} onPress={() => snoozeRequest(item)}>
@@ -1395,7 +1513,7 @@ function RequestScreen({ onBack, request, rows, updateRow, onSubmit, busy }) {
                   value={row.remark}
                   onChangeText={(v) => updateRow(row.orderRequestId, 'remark', v)}
                   placeholder="Remark required"
-                  placeholderTextColor="#8793a6"
+                  placeholderTextColor={MUTED}
                 />
               )}
             </View>
@@ -1471,16 +1589,24 @@ function ScannerScreen({ onBack, cameraRef, cameraLayout, scanFrameLayout, scanL
   );
 }
 
-function MenuButton({ icon, title, subtitle, onPress }) {
+function MenuButton({ icon, title, subtitle, onPress, accent, badge }) {
   return (
-    <TouchableOpacity style={styles.menuButton} onPress={onPress}>
-      <View style={styles.menuIcon}>
+    <TouchableOpacity
+      style={[styles.menuButton, accent ? { borderColor: `${accent}55`, shadowColor: accent } : null]}
+      onPress={onPress}
+    >
+      <View style={[styles.menuIcon, accent ? { backgroundColor: `${accent}22` } : null]}>
         <Text style={{ fontSize: 22 }}>{icon}</Text>
       </View>
       <View style={{ flex: 1 }}>
         <Text style={styles.menuTitle}>{title}</Text>
         <Text style={styles.menuSub}>{subtitle}</Text>
       </View>
+      {badge ? (
+        <View style={styles.menuBadge}>
+          <Text style={styles.menuBadgeText}>{badge}</Text>
+        </View>
+      ) : null}
       <Text style={styles.chevron}>›</Text>
     </TouchableOpacity>
   );
@@ -1546,54 +1672,110 @@ const styles = StyleSheet.create({
   brandLogo: { alignSelf: 'center', width: 190, height: 190 },
   appTitle: { marginTop: 16, textAlign: 'center', color: DARK, fontSize: 24, fontWeight: '900' },
   appSub: { marginTop: 4, marginBottom: 22, textAlign: 'center', color: MUTED, fontSize: 11, fontWeight: '800', letterSpacing: 1.4 },
-  card: { backgroundColor: '#fff', padding: 18, borderRadius: 20, borderWidth: 1, borderColor: BORDER },
+  card: { backgroundColor: CARD_SOLID, padding: 18, borderRadius: 20, borderWidth: 1, borderColor: BORDER },
   homePage: { padding: 20, paddingBottom: 50 },
   homeHeader: { flexDirection: 'row', justifyContent: 'space-between', alignItems: 'center' },
-  hello: { color: MUTED, fontSize: 11, fontWeight: '800' },
+  hello: { color: MUTED, fontSize: 11, fontWeight: '800', letterSpacing: 1.2 },
   homeName: { marginTop: 3, color: DARK, fontSize: 24, fontWeight: '900' },
-  logout: { color: DANGER, fontWeight: '800' },
-  branchCard: { marginTop: 20, marginBottom: 22, padding: 18, backgroundColor: BLUE, borderRadius: 20 },
-  branchTitle: { color: '#fff', fontSize: 18, fontWeight: '900' },
-  branchSub: { marginTop: 5, color: '#dbe7ff', fontSize: 12 },
+  homeAppLabel: { marginTop: 4, color: MUTED, fontSize: 11, fontWeight: '700' },
+  headerIconButton: {
+    width: 42,
+    height: 42,
+    marginRight: 8,
+    borderRadius: 21,
+    borderWidth: 1,
+    borderColor: BORDER,
+    alignItems: 'center',
+    justifyContent: 'center',
+    backgroundColor: CARD_SOLID,
+  },
+  headerIcon: { fontSize: 16 },
+  headerDot: {
+    position: 'absolute',
+    top: 8,
+    right: 8,
+    width: 8,
+    height: 8,
+    borderRadius: 4,
+    backgroundColor: SUCCESS,
+  },
+  logoutChip: {
+    paddingHorizontal: 12,
+    paddingVertical: 8,
+    borderRadius: 16,
+    borderWidth: 1,
+    borderColor: BORDER,
+    backgroundColor: CARD_SOLID,
+  },
+  logout: { color: DANGER, fontWeight: '800', fontSize: 12 },
+  branchCard: {
+    marginTop: 20,
+    marginBottom: 22,
+    padding: 18,
+    backgroundColor: CARD_SOLID,
+    borderRadius: 20,
+    borderWidth: 1,
+    borderColor: NEON_CYAN,
+    shadowColor: NEON_CYAN,
+    shadowOpacity: 0.35,
+    shadowRadius: 16,
+    elevation: 8,
+  },
+  branchKicker: { color: NEON_CYAN, fontSize: 10, fontWeight: '900', letterSpacing: 1.2 },
+  branchTitle: { marginTop: 6, color: DARK, fontSize: 22, fontWeight: '900' },
+  branchSub: { marginTop: 6, color: MUTED, fontSize: 12 },
   menuButton: {
     minHeight: 82,
     marginBottom: 13,
     padding: 15,
-    backgroundColor: '#fff',
+    backgroundColor: CARD_SOLID,
     borderWidth: 1,
     borderColor: BORDER,
     borderRadius: 18,
     flexDirection: 'row',
     alignItems: 'center',
+    shadowOpacity: 0.28,
+    shadowRadius: 12,
+    elevation: 6,
   },
   menuIcon: {
     width: 48,
     height: 48,
     borderRadius: 15,
-    backgroundColor: '#edf3ff',
+    backgroundColor: 'rgba(62, 224, 255, 0.12)',
     alignItems: 'center',
     justifyContent: 'center',
     marginRight: 13,
   },
   menuTitle: { color: DARK, fontSize: 16, fontWeight: '900' },
   menuSub: { marginTop: 4, color: MUTED, fontSize: 11 },
+  menuBadge: {
+    marginRight: 8,
+    paddingHorizontal: 8,
+    paddingVertical: 4,
+    borderRadius: 10,
+    backgroundColor: WARNING,
+  },
+  menuBadgeText: { color: '#041018', fontSize: 10, fontWeight: '900' },
   chevron: { color: BLUE, fontSize: 28 },
   pendingCard: {
     marginTop: 10,
     padding: 14,
-    backgroundColor: '#fff7e6',
+    backgroundColor: 'rgba(240, 193, 77, 0.12)',
     borderRadius: 14,
+    borderWidth: 1,
+    borderColor: WARNING,
     flexDirection: 'row',
     justifyContent: 'space-between',
   },
-  pendingText: { color: '#865b00', flex: 1 },
+  pendingText: { color: WARNING, flex: 1 },
   pendingAction: { color: BLUE, fontWeight: '900' },
   topContent: { padding: 14, paddingBottom: 20 },
   sectionLabel: { marginBottom: 10, color: DARK, fontSize: 11, fontWeight: '900' },
   verificationRow: {
     marginBottom: 10,
     padding: 14,
-    backgroundColor: '#fff',
+    backgroundColor: CARD_SOLID,
     borderWidth: 1,
     borderColor: BORDER,
     borderRadius: 15,
@@ -1601,14 +1783,14 @@ const styles = StyleSheet.create({
   },
   rowPartNo: { color: DARK, fontSize: 14, fontWeight: '900' },
   rowPartName: { marginTop: 3, color: MUTED, fontSize: 11 },
-  rowMeta: { marginTop: 7, color: '#4b5563', fontSize: 11 },
+  rowMeta: { marginTop: 7, color: MUTED, fontSize: 11 },
   delete: { marginTop: 10, color: DANGER, fontSize: 11, fontWeight: '800' },
   summaryRow: { marginTop: 4, marginBottom: 14, flexDirection: 'row' },
   miniStat: {
     flex: 1,
     marginRight: 6,
     paddingVertical: 10,
-    backgroundColor: '#fff',
+    backgroundColor: CARD_SOLID,
     borderWidth: 1,
     borderColor: BORDER,
     borderRadius: 12,
@@ -1616,7 +1798,7 @@ const styles = StyleSheet.create({
   },
   miniValue: { color: BLUE, fontSize: 17, fontWeight: '900' },
   miniLabel: { marginTop: 3, color: MUTED, fontSize: 9 },
-  detailCard: { padding: 16, backgroundColor: '#fff', borderWidth: 1, borderColor: BORDER, borderRadius: 18 },
+  detailCard: { padding: 16, backgroundColor: CARD_SOLID, borderWidth: 1, borderColor: BORDER, borderRadius: 18 },
   partBig: { color: DARK, fontSize: 19, fontWeight: '900' },
   partName: { marginTop: 4, color: MUTED },
   infoGrid: { marginTop: 14, flexDirection: 'row', flexWrap: 'wrap' },
@@ -1626,7 +1808,7 @@ const styles = StyleSheet.create({
   bottomPanel: {
     padding: 12,
     paddingBottom: Platform.OS === 'ios' ? 22 : 12,
-    backgroundColor: '#fff',
+    backgroundColor: CARD_SOLID,
     borderTopWidth: 1,
     borderTopColor: BORDER,
   },
@@ -1639,18 +1821,18 @@ const styles = StyleSheet.create({
     borderWidth: 1,
     borderColor: BORDER,
     borderRadius: 12,
-    backgroundColor: '#fafcff',
+    backgroundColor: 'rgba(8, 16, 28, 0.92)',
     color: DARK,
   },
   twoInputs: { flexDirection: 'row' },
   halfInput: { marginRight: 8 },
   actionRow: { flexDirection: 'row', alignItems: 'center' },
   listContent: { padding: 14, paddingBottom: 30 },
-  requestCard: { marginBottom: 12, padding: 16, backgroundColor: '#fff', borderWidth: 1, borderColor: BORDER, borderRadius: 17 },
+  requestCard: { marginBottom: 12, padding: 16, backgroundColor: CARD_SOLID, borderWidth: 1, borderColor: BORDER, borderRadius: 17 },
   rowBetween: { flexDirection: 'row', justifyContent: 'space-between', alignItems: 'center' },
   requestNo: { color: DARK, fontSize: 16, fontWeight: '900' },
   newBadge: { paddingHorizontal: 8, paddingVertical: 4, borderRadius: 7, backgroundColor: DANGER, color: '#fff', fontSize: 9, fontWeight: '900', overflow: 'hidden' },
-  requestFrom: { marginTop: 9, color: '#42506a', fontSize: 12 },
+  requestFrom: { marginTop: 9, color: MUTED, fontSize: 12 },
   requestMeta: { marginTop: 7, color: MUTED, fontSize: 11 },
   requestActions: { marginTop: 13, flexDirection: 'row' },
   snoozeButton: {
@@ -1665,12 +1847,12 @@ const styles = StyleSheet.create({
   },
   snoozeText: { color: MUTED, fontWeight: '800' },
   pickButton: { flex: 1.5, minHeight: 42, backgroundColor: BLUE, borderRadius: 11, alignItems: 'center', justifyContent: 'center' },
-  pickText: { color: '#fff', fontWeight: '900' },
-  requestHeader: { padding: 14, backgroundColor: '#fff', borderBottomWidth: 1, borderBottomColor: BORDER, alignItems: 'center' },
+  pickText: { color: '#041018', fontWeight: '900' },
+  requestHeader: { padding: 14, backgroundColor: CARD_SOLID, borderBottomWidth: 1, borderBottomColor: BORDER, alignItems: 'center' },
   requestHeaderNo: { color: DARK, fontSize: 17, fontWeight: '900' },
   requestHeaderSub: { marginTop: 3, color: MUTED, fontSize: 11 },
   requestPartsContent: { padding: 10, paddingBottom: 30 },
-  requestPartCard: { marginTop: 10, padding: 14, backgroundColor: '#fff', borderWidth: 1, borderColor: BORDER, borderRadius: 14 },
+  requestPartCard: { marginTop: 10, padding: 14, backgroundColor: CARD_SOLID, borderWidth: 1, borderColor: BORDER, borderRadius: 14 },
   partNumberText: { color: DARK, fontSize: 20, fontWeight: '900' },
   partDescriptionText: { marginTop: 4, color: MUTED, fontSize: 12, fontWeight: '600' },
   locValueText: { marginTop: 10, color: DARK, fontSize: 16, fontWeight: '800' },
@@ -1679,12 +1861,12 @@ const styles = StyleSheet.create({
   qtyBlock: { marginTop: 12, flexDirection: 'row' },
   qtyField: { flex: 1, marginRight: 8 },
   qtyLabel: { color: MUTED, fontSize: 11, fontWeight: '800', marginBottom: 6 },
-  qtyReadOnly: { minHeight: 48, borderWidth: 1, borderColor: BORDER, borderRadius: 10, textAlign: 'center', textAlignVertical: 'center', color: DARK, fontSize: 18, fontWeight: '800', paddingTop: 12, backgroundColor: '#f4f7fb' },
-  acceptedQtyInput: { minHeight: 48, borderWidth: 2, borderColor: BLUE, borderRadius: 10, textAlign: 'center', color: DARK, fontSize: 22, fontWeight: '900', backgroundColor: '#fff' },
+  qtyReadOnly: { minHeight: 48, borderWidth: 1, borderColor: BORDER, borderRadius: 10, textAlign: 'center', textAlignVertical: 'center', color: DARK, fontSize: 18, fontWeight: '800', paddingTop: 12, backgroundColor: 'rgba(62, 224, 255, 0.08)' },
+  acceptedQtyInput: { minHeight: 48, borderWidth: 2, borderColor: BLUE, borderRadius: 10, textAlign: 'center', color: DARK, fontSize: 22, fontWeight: '900', backgroundColor: CARD_SOLID },
   requestCardStatus: { marginTop: 10, alignItems: 'flex-start' },
-  tableHeader: { flexDirection: 'row', paddingHorizontal: 8, paddingVertical: 9, backgroundColor: '#edf3ff', borderRadius: 10 },
+  tableHeader: { flexDirection: 'row', paddingHorizontal: 8, paddingVertical: 9, backgroundColor: 'rgba(62, 224, 255, 0.12)', borderRadius: 10 },
   th: { flex: 1, color: DARK, fontSize: 9, fontWeight: '900', textAlign: 'center' },
-  requestPartRow: { marginTop: 9, padding: 10, backgroundColor: '#fff', borderWidth: 1, borderColor: BORDER, borderRadius: 13 },
+  requestPartRow: { marginTop: 9, padding: 10, backgroundColor: CARD_SOLID, borderWidth: 1, borderColor: BORDER, borderRadius: 13 },
   requestMainLine: { flexDirection: 'row', alignItems: 'center' },
   tdStrong: { color: DARK, fontSize: 10, fontWeight: '900' },
   td: { flex: 1, textAlign: 'center', color: DARK, fontSize: 10 },
@@ -1692,7 +1874,7 @@ const styles = StyleSheet.create({
   requestExtra: { marginTop: 9, flexDirection: 'row', justifyContent: 'space-between', alignItems: 'center' },
   requestExtraText: { flex: 1, color: MUTED, fontSize: 9 },
   remarkInput: { marginTop: 8, minHeight: 40, paddingHorizontal: 10, borderWidth: 1, borderColor: BORDER, borderRadius: 9, color: DARK },
-  submitBar: { padding: 12, backgroundColor: '#fff', borderTopWidth: 1, borderTopColor: BORDER },
+  submitBar: { padding: 12, backgroundColor: CARD_SOLID, borderTopWidth: 1, borderTopColor: BORDER },
   scannerPage: { flex: 1, backgroundColor: '#000' },
   qrFrame: { position: 'absolute', top: '28%', left: '15%', right: '15%', aspectRatio: 1, borderWidth: 1, borderColor: 'rgba(255,255,255,0.35)' },
   qrCornerTL: { position: 'absolute', left: -2, top: -2, width: 34, height: 34, borderLeftWidth: 4, borderTopWidth: 4, borderColor: '#62f08d' },
@@ -1728,6 +1910,6 @@ const styles = StyleSheet.create({
   scanHelp: { position: 'absolute', top: 330, left: 20, right: 20, textAlign: 'center', color: '#fff', fontSize: 14, fontWeight: '700' },
   scannerBottomBar: { position: 'absolute', left: 20, right: 20, bottom: 38, alignItems: 'center' },
   scanButton: { width: '100%', minHeight: 54, borderRadius: 15, backgroundColor: BLUE, alignItems: 'center', justifyContent: 'center' },
-  scanButtonText: { color: '#fff', fontWeight: '900' },
+  scanButtonText: { color: '#041018', fontWeight: '900' },
   vibrationNote: { marginTop: 10, color: '#d6dbe5', fontSize: 11 },
 });
