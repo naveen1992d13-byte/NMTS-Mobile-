@@ -1,4 +1,4 @@
-package in.sleepingstock.mobile.requestalert
+package `in`.sleepingstock.mobile.requestalert
 
 import com.google.firebase.messaging.FirebaseMessagingService
 import com.google.firebase.messaging.RemoteMessage

@@ -1,4 +1,4 @@
-package in.sleepingstock.mobile.requestalert
+package `in`.sleepingstock.mobile.requestalert
 
 import android.app.Notification
 import android.app.NotificationChannel

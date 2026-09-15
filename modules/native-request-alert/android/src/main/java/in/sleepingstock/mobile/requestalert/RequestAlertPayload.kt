@@ -1,4 +1,4 @@
-package in.sleepingstock.mobile.requestalert
+package `in`.sleepingstock.mobile.requestalert
 
 import android.content.Intent
 import android.os.Bundle
