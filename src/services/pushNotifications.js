@@ -1,6 +1,6 @@
 // Push notification helper for Sleeping Stock Mobile.
 // Listeners register once per device session. Token errors are surfaced, not swallowed.
-import { Platform } from 'react-native';
+import { AppState, Platform } from 'react-native';
 import * as Notifications from 'expo-notifications';
 import * as Device from 'expo-device';
 import Constants from 'expo-constants';
@@ -22,13 +22,20 @@ let lastHandledResponseId = null;
 let teardownFn = null;
 
 Notifications.setNotificationHandler({
-  handleNotification: async () => ({
-    shouldShowAlert: true,
-    shouldPlaySound: true,
-    shouldSetBadge: false,
-    shouldShowBanner: true,
-    shouldShowList: true,
-  }),
+  handleNotification: async (notification) => {
+    const data = notification?.request?.content?.data || {};
+    const foreground = AppState.currentState === 'active';
+    const requestAlert = isBranchRequest(data);
+    return {
+      shouldShowAlert: true,
+      // Foreground request alerts use the in-app looping ringtone. Playing the
+      // notification sound here interrupts that loop (Android audio focus).
+      shouldPlaySound: !(foreground && requestAlert),
+      shouldSetBadge: false,
+      shouldShowBanner: true,
+      shouldShowList: true,
+    };
+  },
 });
 
 async function ensureAndroidChannel() {
@@ -171,12 +178,8 @@ export async function initPushNotifications({
     }
   });
 
-  Notifications.getLastNotificationResponseAsync()
-    .then((response) => {
-      if (!response) return;
-      handleResponse(response);
-    })
-    .catch((error) => console.log('[push] getLastNotificationResponseAsync failed', error));
+  // Do not replay getLastNotificationResponseAsync. A stale last-tap from a
+  // previous lock/unlock would Open Request and stop the looping ringtone.
 
   initializedForDeviceId = key;
   teardownFn = function teardownPushNotifications() {

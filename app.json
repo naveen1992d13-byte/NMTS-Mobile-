@@ -38,6 +38,7 @@
       ],
       "expo-sqlite",
       "expo-secure-store",
+      "expo-av",
       [
         "expo-notifications",
         {

@@ -45,13 +45,33 @@ async function resolveAuthContext(overrideUrl) {
   return { token, baseUrl };
 }
 
+function errorDetailText(error) {
+  const detail = error?.response?.data?.detail;
+  if (typeof detail === 'string') return detail;
+  if (detail?.message) return detail.message;
+  return error?.message || '';
+}
+
+export function isInvalidDeviceSession(error) {
+  const status = error?.status || error?.response?.status || 0;
+  if (status === 401) return true;
+  if (status !== 403) return false;
+  const msg = String(error?.message || errorDetailText(error) || '').toLowerCase();
+  return (
+    msg.includes('re-pair') ||
+    msg.includes('missing device session') ||
+    msg.includes('invalid or expired') ||
+    msg.includes('device is inactive') ||
+    msg.includes('mobile user is inactive')
+  );
+}
+
 function errorFromAxios(error) {
   if (error instanceof ApiError) return error;
   const status = error?.response?.status || 0;
-  const detail = error?.response?.data?.detail;
-  const message = typeof detail === 'string' ? detail : detail?.message || error?.message || 'Unable to connect to the NMTS server.';
+  const message = errorDetailText(error) || 'Unable to connect to the NMTS server.';
   let kind = 'server';
-  if (status === 401 || status === 403) kind = 'auth';
+  if (isInvalidDeviceSession({ status, message, response: error?.response })) kind = 'auth';
   else if (!status) kind = error?.code === 'ECONNABORTED' ? 'timeout' : 'network';
   return new ApiError(message, { status, kind, data: error?.response?.data || null });
 }
@@ -76,7 +96,9 @@ async function request(method, path, { data, params, auth = true, baseUrl, timeo
     return response.data;
   } catch (rawError) {
     const error = errorFromAxios(rawError);
-    if (auth && (error.status === 401 || error.status === 403)) {
+    // Business 403s (e.g. "this device did not pick this request") must not
+    // wipe a valid pairing session. Only real session/device-auth failures do.
+    if (auth && isInvalidDeviceSession(error)) {
       clearApiAuthCache();
       await clearSession();
       if (onSessionInvalidated) onSessionInvalidated(error);

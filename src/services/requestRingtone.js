@@ -45,8 +45,8 @@ export async function startRequestRingtone(key) {
         staysActiveInBackground: true,
         shouldDuckAndroid: false,
         playThroughEarpieceAndroid: false,
-        interruptionModeAndroid: av.Audio.InterruptionModeAndroid?.DoNotMix,
-        interruptionModeIOS: av.Audio.InterruptionModeIOS?.DoNotMix,
+        interruptionModeAndroid: av.Audio.InterruptionModeAndroid?.DuckOthers,
+        interruptionModeIOS: av.Audio.InterruptionModeIOS?.DuckOthers,
       });
     } catch (error) {
       console.log('[ringtone] audio mode failed', error);
@@ -67,6 +67,12 @@ export async function startRequestRingtone(key) {
         return;
       }
       soundObject = created.sound;
+      soundObject.setOnPlaybackStatusUpdate((status) => {
+        if (ringingKey !== nextKey) return;
+        if (status?.didJustFinish) {
+          soundObject?.replayAsync?.().catch(() => {});
+        }
+      });
     } catch (error) {
       console.log('[ringtone] start failed', error);
     }

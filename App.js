@@ -5,6 +5,7 @@ import {
   Animated,
   AppState,
   BackHandler,
+  findNodeHandle,
   FlatList,
   Image,
   KeyboardAvoidingView,
@@ -88,6 +89,14 @@ const CURRENT_VERSION_NAME = Constants.expoConfig?.version || '1.0.0';
 function friendlyError(error) {
   if (error instanceof ApiError) return error.message;
   return error?.message || 'Something went wrong. Please try again.';
+}
+
+function requestPartLoc(part) {
+  const candidates = [part?.loc, part?.loc_at_request, part?.bin_location];
+  for (const value of candidates) {
+    if (value != null && String(value) !== '') return value;
+  }
+  return '-';
 }
 
 function cleanPartNumber(value) {
@@ -426,13 +435,21 @@ export default function App() {
   useEffect(() => {
     const onAppState = (state) => {
       if (state !== 'active') return;
-      const live = (notificationsRef.current || []).find((row) => {
-        const key = row.request_group_key || row.request_number;
-        return key && !snoozedRequestKeysRef.current.has(key);
-      });
-      if (live && screenRef.current !== 'request') {
-        startRequestRingtone(live.request_group_key || live.request_number);
-      }
+      (async () => {
+        try {
+          const rows = await getNotifications();
+          notificationsRef.current = rows || [];
+          setNotifications(rows || []);
+        } catch (_e) {}
+        if (screenRef.current === 'request') return;
+        const live = (notificationsRef.current || []).find((row) => {
+          const key = row.request_group_key || row.request_number;
+          return key && !snoozedRequestKeysRef.current.has(key);
+        });
+        if (live) {
+          startRequestRingtone(live.request_group_key || live.request_number);
+        }
+      })();
     };
     const sub = AppState.addEventListener('change', onAppState);
     return () => sub.remove();
@@ -983,7 +1000,7 @@ export default function App() {
         partName: part.description || part.part_name || '-',
         requestedQty: numberValue(part.requested_qty),
         availableQty: numberValue(part.available_qty_at_request ?? part.available_qty),
-        loc: part.loc || part.loc_at_request || part.location || '-',
+        loc: requestPartLoc(part),
         purchaseAging: part.purchase_aging_days ?? part.purchase_aging ?? '-',
         salesAging: part.sales_aging_days ?? part.sales_aging ?? '-',
         value: numberValue(part.part_value ?? part.value),
@@ -1469,14 +1486,44 @@ function NotificationsScreen({ onBack, rows, busy, refresh, openRequest, pickReq
 }
 
 function RequestScreen({ onBack, request, rows, updateRow, onSubmit, busy }) {
+  const scrollRef = useRef(null);
+  const qtyRefs = useRef({});
+
+  const keepQtyVisible = (orderRequestId) => {
+    const node = qtyRefs.current[orderRequestId];
+    if (!node || !scrollRef.current) return;
+    const scrollHandle = findNodeHandle(scrollRef.current);
+    if (!scrollHandle) return;
+    setTimeout(() => {
+      node.measureLayout(
+        scrollHandle,
+        (_x, y) => {
+          scrollRef.current?.scrollTo({ y: Math.max(0, y - 24), animated: true });
+        },
+        () => {}
+      );
+    }, Platform.OS === 'android' ? 280 : 80);
+  };
+
   return (
-    <View style={styles.flex}>
+    <KeyboardAvoidingView
+      style={styles.flex}
+      behavior={Platform.OS === 'ios' ? 'padding' : undefined}
+      keyboardVerticalOffset={Platform.OS === 'ios' ? 8 : 0}
+    >
       <Header title="Request Parts" onBack={onBack} />
       <View style={styles.requestHeader}>
         <Text style={styles.requestHeaderNo}>{request?.request_number}</Text>
         <Text style={styles.requestHeaderSub}>{request?.requesting_branch || request?.requesting_dealer || '-'}</Text>
       </View>
-      <ScrollView style={styles.flex} contentContainerStyle={styles.requestPartsContent} keyboardShouldPersistTaps="handled">
+      <ScrollView
+        ref={scrollRef}
+        style={styles.flex}
+        contentContainerStyle={styles.requestPartsContent}
+        keyboardShouldPersistTaps="handled"
+        keyboardDismissMode="on-drag"
+        automaticallyAdjustKeyboardInsets
+      >
         {rows.map((row) => {
           const accepted = numberValue(row.acceptedQty);
           const status = accepted === row.requestedQty ? 'ACCEPTED' : accepted === 0 ? 'REJECTED' : 'PARTIAL';
@@ -1497,10 +1544,14 @@ function RequestScreen({ onBack, request, rows, updateRow, onSubmit, busy }) {
                 <View style={styles.qtyField}>
                   <Text style={styles.qtyLabel}>Accepted Qty</Text>
                   <TextInput
+                    ref={(el) => {
+                      qtyRefs.current[row.orderRequestId] = el;
+                    }}
                     style={styles.acceptedQtyInput}
                     value={row.acceptedQty}
                     onChangeText={(v) => updateRow(row.orderRequestId, 'acceptedQty', v.replace(/[^0-9.]/g, ''))}
                     keyboardType="decimal-pad"
+                    onFocus={() => keepQtyVisible(row.orderRequestId)}
                   />
                 </View>
               </View>
@@ -1514,6 +1565,7 @@ function RequestScreen({ onBack, request, rows, updateRow, onSubmit, busy }) {
                   onChangeText={(v) => updateRow(row.orderRequestId, 'remark', v)}
                   placeholder="Remark required"
                   placeholderTextColor={MUTED}
+                  onFocus={() => keepQtyVisible(row.orderRequestId)}
                 />
               )}
             </View>
@@ -1523,7 +1575,7 @@ function RequestScreen({ onBack, request, rows, updateRow, onSubmit, busy }) {
       <View style={styles.submitBar}>
         <PrimaryButton title="Submit Request Response" onPress={onSubmit} busy={busy} />
       </View>
-    </View>
+    </KeyboardAvoidingView>
   );
 }
 
@@ -1851,7 +1903,7 @@ const styles = StyleSheet.create({
   requestHeader: { padding: 14, backgroundColor: CARD_SOLID, borderBottomWidth: 1, borderBottomColor: BORDER, alignItems: 'center' },
   requestHeaderNo: { color: DARK, fontSize: 17, fontWeight: '900' },
   requestHeaderSub: { marginTop: 3, color: MUTED, fontSize: 11 },
-  requestPartsContent: { padding: 10, paddingBottom: 30 },
+  requestPartsContent: { padding: 10, paddingBottom: 220 },
   requestPartCard: { marginTop: 10, padding: 14, backgroundColor: CARD_SOLID, borderWidth: 1, borderColor: BORDER, borderRadius: 14 },
   partNumberText: { color: DARK, fontSize: 20, fontWeight: '900' },
   partDescriptionText: { marginTop: 4, color: MUTED, fontSize: 12, fontWeight: '600' },
