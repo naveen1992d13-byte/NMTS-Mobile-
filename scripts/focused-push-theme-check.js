@@ -92,6 +92,54 @@ if ((expo.plugins || []).includes('./plugins/withInsistentRequestNotifications.j
   pass('insistent plugin wired in app.json');
 } else fail('insistent plugin not wired in app.json');
 
+const nativePlugin = read('plugins/withNativeRequestAlert.js');
+if (
+  nativePlugin.includes('FOREGROUND_SERVICE_MEDIA_PLAYBACK') &&
+  nativePlugin.includes('WAKE_LOCK') &&
+  nativePlugin.includes('POST_NOTIFICATIONS') &&
+  nativePlugin.includes('FOREGROUND_SERVICE') &&
+  nativePlugin.includes('mediaPlayback') &&
+  nativePlugin.includes('USE_FULL_SCREEN_INTENT')
+) pass('native request-alert plugin declares FGS type and four permissions');
+else fail('native request-alert plugin missing FGS/permissions');
+if ((expo.plugins || []).includes('./plugins/withNativeRequestAlert.js')) {
+  pass('native request-alert plugin wired in app.json');
+} else fail('native request-alert plugin not wired in app.json');
+
+const nativeKt = [
+  'modules/native-request-alert/android/src/main/java/in/sleepingstock/mobile/requestalert/RequestAlertFirebaseMessagingService.kt',
+  'modules/native-request-alert/android/src/main/java/in/sleepingstock/mobile/requestalert/RequestAlertRingingService.kt',
+  'modules/native-request-alert/android/src/main/java/in/sleepingstock/mobile/requestalert/RequestAlertActionReceiver.kt',
+  'modules/native-request-alert/android/src/main/java/in/sleepingstock/mobile/requestalert/RequestAlertModule.kt',
+];
+if (nativeKt.every((rel) => exists(rel))) pass('native Kotlin alert pipeline files present');
+else fail('native Kotlin alert pipeline files missing');
+
+const ringing = read('modules/native-request-alert/android/src/main/java/in/sleepingstock/mobile/requestalert/RequestAlertRingingService.kt');
+const fcm = read('modules/native-request-alert/android/src/main/java/in/sleepingstock/mobile/requestalert/RequestAlertFirebaseMessagingService.kt');
+const manifestSrc = read('modules/native-request-alert/android/src/main/AndroidManifest.xml');
+if (ringing.includes('setFullScreenIntent') || fcm.includes('setFullScreenIntent') || manifestSrc.includes('USE_FULL_SCREEN_INTENT')) {
+  fail('full-screen intent present in native alert pipeline');
+} else pass('no full-screen intent in native alert pipeline');
+if (
+  manifestSrc.includes('FOREGROUND_SERVICE_MEDIA_PLAYBACK') &&
+  manifestSrc.includes('foregroundServiceType="mediaPlayback"') &&
+  ringing.includes('startForegroundService') &&
+  fcm.includes('RequestAlertRingingService.startNow')
+) pass('FCM starts ringing FGS immediately');
+else fail('FCM does not start ringing FGS immediately');
+if (ringing.includes('PARTIAL_WAKE_LOCK') && ringing.includes('MediaPlayer') && ringing.includes('stopForeground(true)')) {
+  pass('wake lock, MediaPlayer loop, and stopForeground(true) present');
+} else fail('ringing service missing wake lock / player / stopForeground');
+if (read('src/services/nativeRequestAlert.js').includes('stopRinging') && app.includes('stopRinging(')) {
+  pass('JS stopRinging bridge wired');
+} else fail('JS stopRinging bridge missing');
+if (app.includes('stopRinging(group.request_group_key') && app.includes('stopRinging(alert.request_group_key')) {
+  pass('existing Pick/Snooze handlers call stopRinging');
+} else fail('Pick/Snooze handlers missing stopRinging');
+if (expo.version === '1.4.0' && expo.android.versionCode === 16) pass('APK version bumped to 1.4.0 / 16');
+else fail('android versionCode/version not bumped');
+
 if (/Hyundai|HYUNDAI/.test(app) || /Hyundai|HYUNDAI/.test(read('src/components/IncomingRequestPopup.js'))) {
   fail('OEM Hyundai branding still present');
 } else pass('no hardcoded OEM branding');

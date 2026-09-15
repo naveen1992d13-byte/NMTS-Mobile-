@@ -1,0 +1,6 @@
+{
+  "platforms": ["android"],
+  "android": {
+    "modules": ["in.sleepingstock.mobile.requestalert.RequestAlertModule"]
+  }
+}

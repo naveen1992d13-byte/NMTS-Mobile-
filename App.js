@@ -60,6 +60,11 @@ import {
 } from './src/services/pushNotifications';
 import { startRequestRingtone, stopRequestRingtone } from './src/services/requestRingtone';
 import {
+  addNativePickListener,
+  addNativeSnoozeListener,
+  stopRinging,
+} from './src/services/nativeRequestAlert';
+import {
   normalizePartNumber,
   splitPartNumbers,
   mapStockRow,
@@ -370,6 +375,7 @@ export default function App() {
 
   const snoozeIncomingAlert = useCallback(async (data) => {
     const alert = data || incomingAlert || {};
+    stopRinging(alert.request_group_key || alert.requestId || alert.request_number);
     await dismissRequestNotification(incomingNotificationRef.current);
     await dismissBranchRequestNotifications();
     incomingNotificationRef.current = null;
@@ -397,13 +403,24 @@ export default function App() {
   useEffect(() => {
     if (!session?.deviceId) return undefined;
     let teardown = () => {};
+    const pickSub = addNativePickListener((data) => {
+      pickIncomingFromPush(data);
+    });
+    const snoozeSub = addNativeSnoozeListener((data) => {
+      snoozeIncomingAlert(data);
+    });
     initPushNotifications({
       deviceId: session.deviceId,
       onNotificationReceived: (data, notification) => {
         if (data?.type === 'auto_perpetual') loadAutoTasksRef.current?.();
         if (isBranchRequest(data)) {
-          const key = data.request_group_key || data.request_number;
-          if (key && !snoozedRequestKeysRef.current.has(key) && AppState.currentState === 'active') {
+          const key = data.request_group_key || data.requestId || data.request_number;
+          if (
+            key &&
+            !snoozedRequestKeysRef.current.has(key) &&
+            AppState.currentState === 'active' &&
+            Platform.OS !== 'android'
+          ) {
             startRequestRingtone(key);
           }
           showIncomingFromPush(data, notification);
@@ -418,8 +435,8 @@ export default function App() {
           return;
         }
         if (isBranchRequest(data)) {
-          const key = data.request_group_key || data.request_number;
-          if (key && !snoozedRequestKeysRef.current.has(key)) {
+          const key = data.request_group_key || data.requestId || data.request_number;
+          if (key && !snoozedRequestKeysRef.current.has(key) && Platform.OS !== 'android') {
             startRequestRingtone(key);
           }
           showIncomingFromPush(data);
@@ -440,7 +457,11 @@ export default function App() {
         teardown = fn || teardown;
       })
       .catch(() => {});
-    return () => teardown();
+    return () => {
+      pickSub?.remove?.();
+      snoozeSub?.remove?.();
+      teardown();
+    };
   }, [session?.deviceId, showIncomingFromPush, pickIncomingFromPush, snoozeIncomingAlert]);
 
   useEffect(() => {
@@ -457,7 +478,7 @@ export default function App() {
           const key = row.request_group_key || row.request_number;
           return key && !snoozedRequestKeysRef.current.has(key);
         });
-        if (live) {
+        if (live && Platform.OS !== 'android') {
           startRequestRingtone(live.request_group_key || live.request_number);
         }
       })();
@@ -973,6 +994,7 @@ export default function App() {
   const pickRequest = async (group) => {
     setRequestBusy(true);
     try {
+      stopRinging(group.request_group_key || group.request_number);
       await acceptNotification(group.request_group_key);
       await dismissRequestNotification(incomingNotificationRef.current);
       await dismissBranchRequestNotifications();
@@ -992,6 +1014,7 @@ export default function App() {
 
   const snoozeRequest = async (group) => {
     try {
+      stopRinging(group.request_group_key || group.request_number);
       const result = await skipNotification(group.request_group_key);
       if (group.request_group_key) snoozedRequestKeysRef.current.add(group.request_group_key);
       if (group.request_number) snoozedRequestKeysRef.current.add(group.request_number);
@@ -1007,6 +1030,7 @@ export default function App() {
   const openRequest = (group) => {
     if (group?.request_group_key) snoozedRequestKeysRef.current.add(group.request_group_key);
     if (group?.request_number) snoozedRequestKeysRef.current.add(group.request_number);
+    stopRinging(group?.request_group_key || group?.request_number);
     stopRequestRingtone();
     setSelectedRequest(group);
     setRequestRows(

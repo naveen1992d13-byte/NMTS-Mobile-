@@ -1,0 +1,7 @@
+{
+  "name": "native-request-alert",
+  "version": "1.0.0",
+  "private": true,
+  "main": "index.js",
+  "description": "Native Android request-alert ringing pipeline for Sleeping Stock Mobile."
+}
