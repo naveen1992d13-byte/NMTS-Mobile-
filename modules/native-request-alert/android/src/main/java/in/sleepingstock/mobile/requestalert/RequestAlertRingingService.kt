@@ -104,8 +104,18 @@ class RequestAlertRingingService : Service() {
       .setSound(null)
       .addAction(0, "Pick", actionPendingIntent(ACTION_PICK, payload, 11))
       .addAction(0, "Snooze", actionPendingIntent(ACTION_SNOOZE, payload, 12))
-    // Do not attach a full-screen activity or a body-tap launch intent.
+      .setContentIntent(bodyTapPendingIntent())
+    // No full-screen intent (do not auto-launch an Activity when the alert starts).
+    // Body tap only brings the app forward — it does NOT stop the ring or Pick the request.
+    // Only the Pick/Snooze actions above do that.
     return builder.build()
+  }
+
+  private fun bodyTapPendingIntent(): PendingIntent? {
+    val launch = packageManager.getLaunchIntentForPackage(packageName) ?: return null
+    launch.addFlags(Intent.FLAG_ACTIVITY_NEW_TASK or Intent.FLAG_ACTIVITY_SINGLE_TOP)
+    val flags = PendingIntent.FLAG_UPDATE_CURRENT or PendingIntent.FLAG_IMMUTABLE
+    return PendingIntent.getActivity(this, 13, launch, flags)
   }
 
   private fun actionPendingIntent(action: String, payload: RequestAlertPayload, requestCode: Int): PendingIntent {
