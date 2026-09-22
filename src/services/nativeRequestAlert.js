@@ -46,3 +46,13 @@ export function addNativeSnoozeListener(listener) {
     listener(toRequestAlertData(payload || {}));
   });
 }
+
+export async function isIgnoringBatteryOptimizations() {
+  if (!NativeRequestAlert?.isIgnoringBatteryOptimizations) return true;
+  return NativeRequestAlert.isIgnoringBatteryOptimizations();
+}
+
+export async function requestIgnoreBatteryOptimizations() {
+  if (!NativeRequestAlert?.requestIgnoreBatteryOptimizations) return false;
+  return NativeRequestAlert.requestIgnoreBatteryOptimizations();
+}

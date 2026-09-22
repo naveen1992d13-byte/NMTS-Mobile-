@@ -20,6 +20,7 @@ import {
   View,
 } from 'react-native';
 import { CameraView, useCameraPermissions } from 'expo-camera';
+import * as Notifications from 'expo-notifications';
 import { extractTextFromImage } from 'expo-text-extractor';
 import * as ImageManipulator from 'expo-image-manipulator';
 import * as Haptics from 'expo-haptics';
@@ -62,6 +63,8 @@ import { startRequestRingtone, stopRequestRingtone } from './src/services/reques
 import {
   addNativePickListener,
   addNativeSnoozeListener,
+  isIgnoringBatteryOptimizations,
+  requestIgnoreBatteryOptimizations,
   stopRinging,
 } from './src/services/nativeRequestAlert';
 import {
@@ -144,6 +147,24 @@ function extractPartDetails(text) {
 
 function differenceFor(systemQty, physicalQty, unitValue) {
   return calculateVerification(systemQty, physicalQty, unitValue);
+}
+
+async function requestOnboardingPermissions(requestCameraPermission) {
+  try {
+    const existing = await Notifications.getPermissionsAsync();
+    if (existing.status !== 'granted') {
+      await Notifications.requestPermissionsAsync();
+    }
+  } catch (_e) {}
+  try {
+    const ignoring = await isIgnoringBatteryOptimizations();
+    if (!ignoring) {
+      await requestIgnoreBatteryOptimizations();
+    }
+  } catch (_e) {}
+  try {
+    await requestCameraPermission();
+  } catch (_e) {}
 }
 
 export default function App() {
@@ -360,6 +381,18 @@ export default function App() {
   useEffect(() => {
     if (session?.deviceId) loadNotifications();
   }, [session?.deviceId, loadNotifications]);
+
+  useEffect(() => {
+    if (!session?.deviceId) return undefined;
+    let cancelled = false;
+    (async () => {
+      await requestOnboardingPermissions(requestPermission);
+      if (cancelled) return;
+    })();
+    return () => {
+      cancelled = true;
+    };
+  }, [session?.deviceId, requestPermission]);
 
   const showIncomingFromPush = useCallback(async (data, notification) => {
     if (!isBranchRequest(data)) return;
