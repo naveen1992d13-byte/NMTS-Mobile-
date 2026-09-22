@@ -20,7 +20,6 @@ import {
   View,
 } from 'react-native';
 import { CameraView, useCameraPermissions } from 'expo-camera';
-import * as Notifications from 'expo-notifications';
 import { extractTextFromImage } from 'expo-text-extractor';
 import * as ImageManipulator from 'expo-image-manipulator';
 import * as Haptics from 'expo-haptics';
@@ -63,9 +62,9 @@ import { startRequestRingtone, stopRequestRingtone } from './src/services/reques
 import {
   addNativePickListener,
   addNativeSnoozeListener,
+  stopRinging,
   isIgnoringBatteryOptimizations,
   requestIgnoreBatteryOptimizations,
-  stopRinging,
 } from './src/services/nativeRequestAlert';
 import {
   normalizePartNumber,
@@ -147,24 +146,6 @@ function extractPartDetails(text) {
 
 function differenceFor(systemQty, physicalQty, unitValue) {
   return calculateVerification(systemQty, physicalQty, unitValue);
-}
-
-async function requestOnboardingPermissions(requestCameraPermission) {
-  try {
-    const existing = await Notifications.getPermissionsAsync();
-    if (existing.status !== 'granted') {
-      await Notifications.requestPermissionsAsync();
-    }
-  } catch (_e) {}
-  try {
-    const ignoring = await isIgnoringBatteryOptimizations();
-    if (!ignoring) {
-      await requestIgnoreBatteryOptimizations();
-    }
-  } catch (_e) {}
-  try {
-    await requestCameraPermission();
-  } catch (_e) {}
 }
 
 export default function App() {
@@ -382,18 +363,6 @@ export default function App() {
     if (session?.deviceId) loadNotifications();
   }, [session?.deviceId, loadNotifications]);
 
-  useEffect(() => {
-    if (!session?.deviceId) return undefined;
-    let cancelled = false;
-    (async () => {
-      await requestOnboardingPermissions(requestPermission);
-      if (cancelled) return;
-    })();
-    return () => {
-      cancelled = true;
-    };
-  }, [session?.deviceId, requestPermission]);
-
   const showIncomingFromPush = useCallback(async (data, notification) => {
     if (!isBranchRequest(data)) return;
     incomingNotificationRef.current = notification || incomingNotificationRef.current || null;
@@ -442,6 +411,36 @@ export default function App() {
     const snoozeSub = addNativeSnoozeListener((data) => {
       snoozeIncomingAlert(data);
     });
+    // One-time permission onboarding for this device session. Runs the
+    // moment the app is logged in / paired (i.e. right after first install
+    // + first open), so every permission the app needs is asked up front
+    // instead of being scattered across screens:
+    // 1. Notification permission — handled inside initPushNotifications()
+    //    below (registerForPushNotificationsAsync), Android 13+ prompt.
+    // 2. Battery-optimization exemption — standard Android API, same
+    //    dialog on every OEM (Samsung, Xiaomi, Vivo, Oppo, OnePlus,
+    //    stock Android). Without this, background/locked-screen alerts
+    //    can be delayed or dropped by the OS regardless of phone brand.
+    // 3. Camera permission — needed for QR pairing and part-number scan.
+    if (Platform.OS === 'android') {
+      (async () => {
+        try {
+          const exempt = await isIgnoringBatteryOptimizations();
+          if (!exempt) {
+            Alert.alert(
+              'Allow request alerts in background',
+              'To make sure incoming request alerts ring even when the app is closed or the phone is locked, please allow Sleeping Stock to run without battery restrictions on the next screen.',
+              [{ text: 'Continue', onPress: () => requestIgnoreBatteryOptimizations() }]
+            );
+          }
+        } catch (_e) {}
+        try {
+          if (!permission?.granted) {
+            await requestPermission();
+          }
+        } catch (_e) {}
+      })();
+    }
     initPushNotifications({
       deviceId: session.deviceId,
       onNotificationReceived: (data, notification) => {

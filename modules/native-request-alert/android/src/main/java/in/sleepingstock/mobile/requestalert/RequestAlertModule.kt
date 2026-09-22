@@ -35,40 +35,45 @@ class RequestAlertModule : Module() {
       RequestAlertRingingService.stop(context, requestId)
     }
 
-    AsyncFunction("isIgnoringBatteryOptimizations") {
-      this@RequestAlertModule.isIgnoringBatteryOptimizations()
+    // True if the OS is already free to wake this app in Doze / app-standby
+    // for FCM delivery. False means background push delivery (and therefore
+    // ringing while the app is closed / screen locked) can be delayed or
+    // dropped by the OS battery manager — most common on Samsung One UI.
+    Function("isIgnoringBatteryOptimizations") {
+      val context = appContext.reactContext ?: return@Function true
+      val pm = context.getSystemService(Context.POWER_SERVICE) as? PowerManager
+      return@Function pm?.isIgnoringBatteryOptimizations(context.packageName) ?: true
     }
 
-    AsyncFunction("requestIgnoreBatteryOptimizations") {
-      this@RequestAlertModule.requestIgnoreBatteryOptimizations()
+    // Opens the system dialog that lets the user directly whitelist this
+    // app from battery optimization. This is the standard Android API;
+    // Samsung devices additionally have their own "Put unused apps to
+    // sleep" / "Auto start" toggles under Settings > Apps > [app] > Battery
+    // that this dialog does not control, so the JS side should still show
+    // the manual-steps guidance as a fallback.
+    Function("requestIgnoreBatteryOptimizations") {
+      val context = appContext.reactContext ?: appContext.currentActivity ?: return@Function
+      if (Build.VERSION.SDK_INT < Build.VERSION_CODES.M) return@Function
+      val pm = context.getSystemService(Context.POWER_SERVICE) as? PowerManager
+      if (pm?.isIgnoringBatteryOptimizations(context.packageName) == true) return@Function
+      try {
+        val intent = Intent(Settings.ACTION_REQUEST_IGNORE_BATTERY_OPTIMIZATIONS).apply {
+          data = Uri.parse("package:${context.packageName}")
+          addFlags(Intent.FLAG_ACTIVITY_NEW_TASK)
+        }
+        context.startActivity(intent)
+      } catch (_: Throwable) {
+        // Some OEM builds (incl. some Samsung firmwares) block this intent;
+        // fall back to the general battery-optimization settings screen.
+        try {
+          val fallback = Intent(Settings.ACTION_IGNORE_BATTERY_OPTIMIZATION_SETTINGS).apply {
+            addFlags(Intent.FLAG_ACTIVITY_NEW_TASK)
+          }
+          context.startActivity(fallback)
+        } catch (_: Throwable) {
+        }
+      }
     }
-  }
-
-  private fun appContextOrNull(): Context? =
-    appContext.reactContext ?: appContext.currentActivity
-
-  private fun isIgnoringBatteryOptimizations(): Boolean {
-    val context = appContextOrNull() ?: return true
-    if (Build.VERSION.SDK_INT < Build.VERSION_CODES.M) return true
-    val pm = context.getSystemService(Context.POWER_SERVICE) as PowerManager
-    return pm.isIgnoringBatteryOptimizations(context.packageName)
-  }
-
-  private fun requestIgnoreBatteryOptimizations(): Boolean {
-    val context = appContextOrNull() ?: return false
-    if (Build.VERSION.SDK_INT < Build.VERSION_CODES.M) return true
-    if (isIgnoringBatteryOptimizations()) return true
-    val intent = Intent(Settings.ACTION_REQUEST_IGNORE_BATTERY_OPTIMIZATIONS).apply {
-      data = Uri.parse("package:${context.packageName}")
-      addFlags(Intent.FLAG_ACTIVITY_NEW_TASK)
-    }
-    val activity = appContext.currentActivity
-    if (activity != null) {
-      activity.startActivity(intent)
-    } else {
-      context.startActivity(intent)
-    }
-    return true
   }
 
   private fun emitMap(event: String, payload: RequestAlertPayload) {
