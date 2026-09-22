@@ -14,7 +14,7 @@
     },
     "android": {
       "package": "in.sleepingstock.mobile",
-      "versionCode": 17,
+      "versionCode": 18,
       "googleServicesFile": "./google-services.json",
       "permissions": [
         "CAMERA",

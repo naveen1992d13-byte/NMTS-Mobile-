@@ -35,6 +35,25 @@ export function stopRinging(requestId) {
   NativeRequestAlert?.stopRinging?.(String(requestId || ''));
 }
 
+// Resolves true if this app is already exempt from Android battery
+// optimization (so background FCM delivery + ringing is reliable).
+// On unsupported platforms/native module missing, resolves true so callers
+// don't block on it.
+export async function isIgnoringBatteryOptimizations() {
+  try {
+    const result = await NativeRequestAlert?.isIgnoringBatteryOptimizations?.();
+    return result ?? true;
+  } catch (_e) {
+    return true;
+  }
+}
+
+// Opens the system "ignore battery optimizations" dialog for this app.
+// No-op if the native module is unavailable (e.g. iOS, Expo Go).
+export function requestIgnoreBatteryOptimizations() {
+  NativeRequestAlert?.requestIgnoreBatteryOptimizations?.();
+}
+
 export function addNativePickListener(listener) {
   return NativeRequestAlert?.addListener?.('onPick', (payload) => {
     listener(toRequestAlertData(payload || {}));
