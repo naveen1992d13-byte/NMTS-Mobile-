@@ -52,10 +52,10 @@ class RequestAlertModule : Module() {
     // that this dialog does not control, so the JS side should still show
     // the manual-steps guidance as a fallback.
     Function("requestIgnoreBatteryOptimizations") {
-      val context = appContext.reactContext ?: appContext.currentActivity ?: return@Function
-      if (Build.VERSION.SDK_INT < Build.VERSION_CODES.M) return@Function
+      val context = appContext.reactContext ?: appContext.currentActivity ?: return@Function Unit
+      if (Build.VERSION.SDK_INT < Build.VERSION_CODES.M) return@Function Unit
       val pm = context.getSystemService(Context.POWER_SERVICE) as? PowerManager
-      if (pm?.isIgnoringBatteryOptimizations(context.packageName) == true) return@Function
+      if (pm?.isIgnoringBatteryOptimizations(context.packageName) == true) return@Function Unit
       try {
         val intent = Intent(Settings.ACTION_REQUEST_IGNORE_BATTERY_OPTIMIZATIONS).apply {
           data = Uri.parse("package:${context.packageName}")
