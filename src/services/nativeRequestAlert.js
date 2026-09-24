@@ -65,3 +65,25 @@ export function addNativeSnoozeListener(listener) {
     listener(toRequestAlertData(payload || {}));
   });
 }
+
+export function addNativeIncomingAlertListener(listener) {
+  return NativeRequestAlert?.addListener?.('onIncomingAlert', (payload) => {
+    listener(toRequestAlertData(payload || {}));
+  });
+}
+
+// Android 14+: true when the OS allows this app to fire a full-screen intent.
+// True on older Android / missing native module so callers do not block.
+export async function canUseFullScreenIntent() {
+  try {
+    const result = await NativeRequestAlert?.canUseFullScreenIntent?.();
+    return result ?? true;
+  } catch (_e) {
+    return true;
+  }
+}
+
+// Opens Settings.ACTION_MANAGE_APP_USE_FULL_SCREEN_INTENT for this package.
+export function requestUseFullScreenIntent() {
+  NativeRequestAlert?.requestUseFullScreenIntent?.();
+}

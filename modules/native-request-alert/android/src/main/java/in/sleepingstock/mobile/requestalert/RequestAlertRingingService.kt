@@ -18,8 +18,10 @@ import androidx.core.content.ContextCompat
 
 /**
  * Foreground media-playback service that loops the existing custom request
- * sound until Pick or Snooze. Does not use full-screen intent and does not
- * auto-launch an Activity when the alert starts.
+ * sound until Pick or Snooze. Posts a heads-up notification with Pick/Snooze
+ * actions and a full-screen intent that opens RequestAlertLockGateActivity
+ * (then MainActivity → IncomingRequestPopup). If the OS/OEM suppresses the
+ * full-screen Activity, the heads-up + looping sound + actions still fire.
  */
 class RequestAlertRingingService : Service() {
   private var mediaPlayer: MediaPlayer? = null
@@ -57,6 +59,7 @@ class RequestAlertRingingService : Service() {
   override fun onDestroy() {
     releasePlayer()
     releaseWakeLock()
+    clearActiveRequest()
     val manager = getSystemService(NotificationManager::class.java)
     manager?.cancel(NOTIFICATION_ID)
     super.onDestroy()
@@ -99,15 +102,18 @@ class RequestAlertRingingService : Service() {
       .setAutoCancel(false)
       .setOnlyAlertOnce(true)
       .setPriority(NotificationCompat.PRIORITY_MAX)
-      .setCategory(NotificationCompat.CATEGORY_STATUS)
+      // CATEGORY_ALARM: closest accurate match for an urgent, time-boxed
+      // request that rings until Pick/Snooze — not a phone call (do not use CATEGORY_CALL).
+      .setCategory(NotificationCompat.CATEGORY_ALARM)
       .setVisibility(NotificationCompat.VISIBILITY_PUBLIC)
       .setSound(null)
       .addAction(0, "Pick", actionPendingIntent(ACTION_PICK, payload, 11))
       .addAction(0, "Snooze", actionPendingIntent(ACTION_SNOOZE, payload, 12))
       .setContentIntent(bodyTapPendingIntent())
-    // No full-screen intent (do not auto-launch an Activity when the alert starts).
+      .setFullScreenIntent(fullScreenPendingIntent(payload), true)
     // Body tap only brings the app forward — it does NOT stop the ring or Pick the request.
-    // Only the Pick/Snooze actions above do that.
+    // Only the Pick/Snooze actions above do that. Full-screen intent is best-effort:
+    // OEM/permission suppression must still leave this heads-up + ring intact.
     return builder.build()
   }
 
@@ -116,6 +122,19 @@ class RequestAlertRingingService : Service() {
     launch.addFlags(Intent.FLAG_ACTIVITY_NEW_TASK or Intent.FLAG_ACTIVITY_SINGLE_TOP)
     val flags = PendingIntent.FLAG_UPDATE_CURRENT or PendingIntent.FLAG_IMMUTABLE
     return PendingIntent.getActivity(this, 13, launch, flags)
+  }
+
+  private fun fullScreenPendingIntent(payload: RequestAlertPayload): PendingIntent {
+    val intent = Intent(this, RequestAlertLockGateActivity::class.java).apply {
+      putExtras(payload.toBundle())
+      addFlags(
+        Intent.FLAG_ACTIVITY_NEW_TASK or
+          Intent.FLAG_ACTIVITY_CLEAR_TOP or
+          Intent.FLAG_ACTIVITY_NO_USER_ACTION
+      )
+    }
+    val flags = PendingIntent.FLAG_UPDATE_CURRENT or PendingIntent.FLAG_IMMUTABLE
+    return PendingIntent.getActivity(this, 14, intent, flags)
   }
 
   private fun actionPendingIntent(action: String, payload: RequestAlertPayload, requestCode: Int): PendingIntent {
@@ -188,17 +207,37 @@ class RequestAlertRingingService : Service() {
     private const val SOUND_RESOURCE = "sleeping_stock_alert_2_rising_dispatch"
 
     fun startNow(context: Context, payload: RequestAlertPayload) {
+      val id = payload.requestId
+      synchronized(startLock) {
+        if (id.isNotBlank() && activeRequestId == id) {
+          // Same request is already ringing — skip a duplicate FCM delivery.
+          return
+        }
+        activeRequestId = id.ifBlank { activeRequestId }
+      }
+      RequestAlertModule.emitIncoming(payload)
       val intent = Intent(context, RequestAlertRingingService::class.java).putExtras(payload.toBundle())
       ContextCompat.startForegroundService(context, intent)
     }
 
     fun stop(context: Context, requestId: String? = null) {
       // stopService — do not startForegroundService just to stop (Android 12+ crash).
-      val intent = Intent(context, RequestAlertRingingService::class.java).setAction(ACTION_STOP)
-      if (!requestId.isNullOrBlank()) {
-        intent.putExtra(RequestAlertPayload.KEY_REQUEST_ID, requestId)
+      synchronized(startLock) {
+        activeRequestId = null
       }
+      RequestAlertLockFlags.clear(context as? android.app.Activity)
       context.stopService(Intent(context, RequestAlertRingingService::class.java))
     }
+
+    fun clearActiveRequest() {
+      synchronized(startLock) {
+        activeRequestId = null
+      }
+    }
+
+    private val startLock = Any()
+
+    @Volatile
+    private var activeRequestId: String? = null
   }
 }

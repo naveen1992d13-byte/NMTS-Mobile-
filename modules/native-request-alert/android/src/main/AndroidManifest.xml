@@ -4,6 +4,7 @@
   <uses-permission android:name="android.permission.FOREGROUND_SERVICE_MEDIA_PLAYBACK" />
   <uses-permission android:name="android.permission.WAKE_LOCK" />
   <uses-permission android:name="android.permission.REQUEST_IGNORE_BATTERY_OPTIMIZATIONS" />
+  <uses-permission android:name="android.permission.USE_FULL_SCREEN_INTENT" />
 
   <application>
     <service
@@ -23,5 +24,16 @@
     <receiver
       android:name=".RequestAlertActionReceiver"
       android:exported="false" />
+
+    <activity
+      android:name=".RequestAlertLockGateActivity"
+      android:excludeFromRecents="true"
+      android:exported="false"
+      android:launchMode="singleTask"
+      android:noHistory="true"
+      android:showWhenLocked="true"
+      android:taskAffinity=""
+      android:theme="@android:style/Theme.Translucent.NoTitleBar"
+      android:turnScreenOn="true" />
   </application>
 </manifest>

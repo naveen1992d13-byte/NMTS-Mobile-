@@ -9,6 +9,7 @@ const PERMISSIONS = [
   'android.permission.FOREGROUND_SERVICE',
   'android.permission.FOREGROUND_SERVICE_MEDIA_PLAYBACK',
   'android.permission.WAKE_LOCK',
+  'android.permission.USE_FULL_SCREEN_INTENT',
 ];
 
 function ensurePermission(manifest, name) {
@@ -28,13 +29,6 @@ function withNativeRequestAlert(config) {
     if (ringing) {
       ringing.$['android:foregroundServiceType'] = 'mediaPlayback';
       ringing.$['android:stopWithTask'] = 'false';
-    }
-    const uses = manifest.manifest['uses-permission'] || [];
-    const hasFullScreen = uses.some(
-      (entry) => entry.$?.['android:name'] === 'android.permission.USE_FULL_SCREEN_INTENT'
-    );
-    if (hasFullScreen) {
-      throw new Error('Native request alert must not add USE_FULL_SCREEN_INTENT');
     }
     return mod;
   });

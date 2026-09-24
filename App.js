@@ -62,9 +62,12 @@ import { startRequestRingtone, stopRequestRingtone } from './src/services/reques
 import {
   addNativePickListener,
   addNativeSnoozeListener,
+  addNativeIncomingAlertListener,
   stopRinging,
   isIgnoringBatteryOptimizations,
   requestIgnoreBatteryOptimizations,
+  canUseFullScreenIntent,
+  requestUseFullScreenIntent,
 } from './src/services/nativeRequestAlert';
 import {
   normalizePartNumber,
@@ -216,6 +219,9 @@ export default function App() {
   const sessionRef = useRef(null);
   const notificationsRef = useRef([]);
   const incomingNotificationRef = useRef(null);
+  const incomingAlertRef = useRef(null);
+  const incomingShownKeyRef = useRef(null);
+  const fsiOnboardingRef = useRef({ initialShown: false, returnChecked: false });
   const openRequestRef = useRef(null);
   const pickRequestRef = useRef(null);
 
@@ -365,6 +371,9 @@ export default function App() {
 
   const showIncomingFromPush = useCallback(async (data, notification) => {
     if (!isBranchRequest(data)) return;
+    const key = String(data.request_group_key || data.requestId || data.request_number || '');
+    if (key && incomingShownKeyRef.current === key && incomingAlertRef.current) return;
+    if (key) incomingShownKeyRef.current = key;
     incomingNotificationRef.current = notification || incomingNotificationRef.current || null;
     let rows = notificationsRef.current || [];
     try {
@@ -372,11 +381,15 @@ export default function App() {
       setNotifications(rows);
     } catch (_e) {}
     const group = findRequestGroup(rows, data);
-    setIncomingAlert(buildIncomingAlert(data, sessionRef.current, group));
+    const alert = buildIncomingAlert(data, sessionRef.current, group);
+    incomingAlertRef.current = alert;
+    setIncomingAlert(alert);
   }, []);
 
   const snoozeIncomingAlert = useCallback(async (data) => {
     const alert = data || incomingAlert || {};
+    incomingShownKeyRef.current = null;
+    incomingAlertRef.current = null;
     stopRinging(alert.request_group_key || alert.requestId || alert.request_number);
     await dismissRequestNotification(incomingNotificationRef.current);
     await dismissBranchRequestNotifications();
@@ -411,6 +424,37 @@ export default function App() {
     const snoozeSub = addNativeSnoozeListener((data) => {
       snoozeIncomingAlert(data);
     });
+    const incomingSub = addNativeIncomingAlertListener((data) => {
+      const key = data.request_group_key || data.requestId || data.request_number;
+      if (key && snoozedRequestKeysRef.current.has(key)) return;
+      showIncomingFromPush(data);
+    });
+    const promptFullScreenIntent = (isReturn) => {
+      if (isReturn) {
+        if (fsiOnboardingRef.current.returnChecked) return;
+        fsiOnboardingRef.current.returnChecked = true;
+      } else {
+        if (fsiOnboardingRef.current.initialShown) return;
+        fsiOnboardingRef.current.initialShown = true;
+      }
+      Alert.alert(
+        'Allow lock-screen request alerts',
+        'Incoming stock requests need permission to wake the screen and show the request over the lock screen. Please allow full-screen notifications on the next screen.',
+        [{ text: 'Continue', onPress: () => requestUseFullScreenIntent() }]
+      );
+    };
+    const onFsiAppState = (state) => {
+      if (state !== 'active' || Platform.OS !== 'android') return;
+      if (!fsiOnboardingRef.current.initialShown || fsiOnboardingRef.current.returnChecked) return;
+      (async () => {
+        try {
+          const allowed = await canUseFullScreenIntent();
+          if (!allowed) promptFullScreenIntent(true);
+          else fsiOnboardingRef.current.returnChecked = true;
+        } catch (_e) {}
+      })();
+    };
+    const fsiAppSub = AppState.addEventListener('change', onFsiAppState);
     // One-time permission onboarding for this device session. Runs the
     // moment the app is logged in / paired (i.e. right after first install
     // + first open), so every permission the app needs is asked up front
@@ -421,7 +465,10 @@ export default function App() {
     //    dialog on every OEM (Samsung, Xiaomi, Vivo, Oppo, OnePlus,
     //    stock Android). Without this, background/locked-screen alerts
     //    can be delayed or dropped by the OS regardless of phone brand.
-    // 3. Camera permission — needed for QR pairing and part-number scan.
+    // 3. Android 14+ full-screen intent — needed to wake a locked phone
+    //    and show IncomingRequestPopup. Re-checked once when the user
+    //    returns from Settings; not re-prompted on every foreground.
+    // 4. Camera permission — needed for QR pairing and part-number scan.
     if (Platform.OS === 'android') {
       (async () => {
         try {
@@ -433,6 +480,10 @@ export default function App() {
               [{ text: 'Continue', onPress: () => requestIgnoreBatteryOptimizations() }]
             );
           }
+        } catch (_e) {}
+        try {
+          const allowed = await canUseFullScreenIntent();
+          if (!allowed) promptFullScreenIntent(false);
         } catch (_e) {}
         try {
           if (!permission?.granted) {
@@ -492,6 +543,8 @@ export default function App() {
     return () => {
       pickSub?.remove?.();
       snoozeSub?.remove?.();
+      incomingSub?.remove?.();
+      fsiAppSub?.remove?.();
       teardown();
     };
   }, [session?.deviceId, showIncomingFromPush, pickIncomingFromPush, snoozeIncomingAlert]);
@@ -1026,6 +1079,8 @@ export default function App() {
   const pickRequest = async (group) => {
     setRequestBusy(true);
     try {
+      incomingShownKeyRef.current = null;
+      incomingAlertRef.current = null;
       stopRinging(group.request_group_key || group.request_number);
       await acceptNotification(group.request_group_key);
       await dismissRequestNotification(incomingNotificationRef.current);
