@@ -111,16 +111,33 @@ const nativeKt = [
   'modules/native-request-alert/android/src/main/java/in/sleepingstock/mobile/requestalert/RequestAlertRingingService.kt',
   'modules/native-request-alert/android/src/main/java/in/sleepingstock/mobile/requestalert/RequestAlertActionReceiver.kt',
   'modules/native-request-alert/android/src/main/java/in/sleepingstock/mobile/requestalert/RequestAlertModule.kt',
+  'modules/native-request-alert/android/src/main/java/in/sleepingstock/mobile/requestalert/RequestAlertLockGateActivity.kt',
+  'modules/native-request-alert/android/src/main/java/in/sleepingstock/mobile/requestalert/RequestAlertLockFlags.kt',
 ];
 if (nativeKt.every((rel) => exists(rel))) pass('native Kotlin alert pipeline files present');
 else fail('native Kotlin alert pipeline files missing');
 
 const ringing = read('modules/native-request-alert/android/src/main/java/in/sleepingstock/mobile/requestalert/RequestAlertRingingService.kt');
 const fcm = read('modules/native-request-alert/android/src/main/java/in/sleepingstock/mobile/requestalert/RequestAlertFirebaseMessagingService.kt');
+const moduleKt = read('modules/native-request-alert/android/src/main/java/in/sleepingstock/mobile/requestalert/RequestAlertModule.kt');
 const manifestSrc = read('modules/native-request-alert/android/src/main/AndroidManifest.xml');
-if (ringing.includes('setFullScreenIntent') || fcm.includes('setFullScreenIntent') || manifestSrc.includes('USE_FULL_SCREEN_INTENT')) {
-  fail('full-screen intent present in native alert pipeline');
-} else pass('no full-screen intent in native alert pipeline');
+const nativeJs = read('src/services/nativeRequestAlert.js');
+if (
+  ringing.includes('setFullScreenIntent') &&
+  manifestSrc.includes('USE_FULL_SCREEN_INTENT') &&
+  manifestSrc.includes('RequestAlertLockGateActivity') &&
+  ringing.includes('CATEGORY_ALARM') &&
+  !ringing.includes('setCategory(NotificationCompat.CATEGORY_CALL)') &&
+  moduleKt.includes('onIncomingAlert') &&
+  moduleKt.includes('canUseFullScreenIntent') &&
+  nativeJs.includes('addNativeIncomingAlertListener') &&
+  nativeJs.includes('canUseFullScreenIntent') &&
+  app.includes('addNativeIncomingAlertListener') &&
+  app.includes('requestUseFullScreenIntent') &&
+  !app.includes('SYSTEM_ALERT_WINDOW') &&
+  !nativeJs.includes('SYSTEM_ALERT_WINDOW')
+) pass('full-screen intent + incoming-alert + CATEGORY_ALARM wired');
+else fail('full-screen intent / incoming-alert pipeline incomplete');
 if (
   manifestSrc.includes('FOREGROUND_SERVICE_MEDIA_PLAYBACK') &&
   manifestSrc.includes('foregroundServiceType="mediaPlayback"') &&
@@ -137,7 +154,7 @@ if (read('src/services/nativeRequestAlert.js').includes('stopRinging') && app.in
 if (app.includes('stopRinging(group.request_group_key') && app.includes('stopRinging(alert.request_group_key')) {
   pass('existing Pick/Snooze handlers call stopRinging');
 } else fail('Pick/Snooze handlers missing stopRinging');
-if (expo.version === '1.4.0' && expo.android.versionCode === 16) pass('APK version bumped to 1.4.0 / 16');
+if (expo.version === '1.4.0' && expo.android.versionCode === 19) pass('APK version bumped to 1.4.0 / 19');
 else fail('android versionCode/version not bumped');
 
 if (/Hyundai|HYUNDAI/.test(app) || /Hyundai|HYUNDAI/.test(read('src/components/IncomingRequestPopup.js'))) {
