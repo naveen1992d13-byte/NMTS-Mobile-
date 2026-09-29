@@ -132,11 +132,20 @@ class RequestAlertModule : Module() {
         try {
           module.emitMap(event, payload)
           pendingEvent = null
+          if (event == "onIncomingAlert") {
+            RequestAlertLog.i("onIncomingAlert native event emission sent")
+          }
           return
-        } catch (_: Throwable) {
+        } catch (error: Throwable) {
+          if (event == "onIncomingAlert") {
+            RequestAlertLog.e("onIncomingAlert native event emission failed", error)
+          }
         }
       }
       pendingEvent = event to payload
+      if (event == "onIncomingAlert") {
+        RequestAlertLog.i("onIncomingAlert native event emission queued")
+      }
     }
   }
 

@@ -30,6 +30,28 @@ function withNativeRequestAlert(config) {
       ringing.$['android:foregroundServiceType'] = 'mediaPlayback';
       ringing.$['android:stopWithTask'] = 'false';
     }
+    // Only one service receives each MESSAGING_EVENT. intent-filter
+    // priority is ignored for services; Firebase bindService picks an
+    // unspecified match when Expo + the firebase-messaging stub remain.
+    // ExpoFirebaseMessagingService only delegates to FirebaseMessagingDelegate,
+    // which RequestAlertFirebaseMessagingService already forwards to.
+    if (!manifest.manifest.$['xmlns:tools']) {
+      manifest.manifest.$['xmlns:tools'] = 'http://schemas.android.com/tools';
+    }
+    const servicesList = application.service || [];
+    const removeNames = [
+      'expo.modules.notifications.service.ExpoFirebaseMessagingService',
+      'com.google.firebase.messaging.FirebaseMessagingService',
+    ];
+    application.service = [
+      ...servicesList.filter((service) => !removeNames.includes(String(service.$?.['android:name'] || ''))),
+      ...removeNames.map((name) => ({
+        $: {
+          'android:name': name,
+          'tools:node': 'remove',
+        },
+      })),
+    ];
     return mod;
   });
 

@@ -113,6 +113,7 @@ const nativeKt = [
   'modules/native-request-alert/android/src/main/java/in/sleepingstock/mobile/requestalert/RequestAlertModule.kt',
   'modules/native-request-alert/android/src/main/java/in/sleepingstock/mobile/requestalert/RequestAlertLockGateActivity.kt',
   'modules/native-request-alert/android/src/main/java/in/sleepingstock/mobile/requestalert/RequestAlertLockFlags.kt',
+  'modules/native-request-alert/android/src/main/java/in/sleepingstock/mobile/requestalert/RequestAlertLog.kt',
 ];
 if (nativeKt.every((rel) => exists(rel))) pass('native Kotlin alert pipeline files present');
 else fail('native Kotlin alert pipeline files missing');
@@ -154,8 +155,22 @@ if (read('src/services/nativeRequestAlert.js').includes('stopRinging') && app.in
 if (app.includes('stopRinging(group.request_group_key') && app.includes('stopRinging(alert.request_group_key')) {
   pass('existing Pick/Snooze handlers call stopRinging');
 } else fail('Pick/Snooze handlers missing stopRinging');
-if (expo.version === '1.4.0' && expo.android.versionCode === 19) pass('APK version bumped to 1.4.0 / 19');
+if (expo.version === '1.4.0' && expo.android.versionCode === 20) pass('APK version bumped to 1.4.0 / 20');
 else fail('android versionCode/version not bumped');
+
+if (
+  nativePlugin.includes("tools:node") &&
+  nativePlugin.includes('ExpoFirebaseMessagingService') &&
+  nativePlugin.includes("tools:node': 'remove'") &&
+  fcm.includes('onDeletedMessages') &&
+  fcm.includes('forwardNewTokenToExpo') &&
+  fcm.includes('RequestAlertLog') &&
+  ringing.includes('RequestAlertLog') &&
+  read('modules/native-request-alert/android/src/main/java/in/sleepingstock/mobile/requestalert/RequestAlertLog.kt').includes('RequestAlert') &&
+  !app.includes('setBackgroundMessageHandler') &&
+  !read('src/services/pushNotifications.js').includes('setBackgroundMessageHandler')
+) pass('sole MESSAGING_EVENT handler + Expo delegate + RequestAlert logs');
+else fail('MESSAGING_EVENT sole-handler / Expo delegate / logs incomplete');
 
 if (/Hyundai|HYUNDAI/.test(app) || /Hyundai|HYUNDAI/.test(read('src/components/IncomingRequestPopup.js'))) {
   fail('OEM Hyundai branding still present');

@@ -14,6 +14,7 @@ import android.os.Bundle
 class RequestAlertLockGateActivity : Activity() {
   override fun onCreate(savedInstanceState: Bundle?) {
     super.onCreate(savedInstanceState)
+    RequestAlertLog.i("LockGate Activity launch")
     RequestAlertLockFlags.apply(this)
     RequestAlertLockFlags.registerOnce(application)
     RequestAlertLockFlags.markPendingLockBypass()

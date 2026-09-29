@@ -37,15 +37,22 @@ class RequestAlertRingingService : Service() {
     }
     val payload = RequestAlertPayload.fromIntent(intent)
     currentPayload = payload
+    val canFsi = canUseFullScreenIntent()
+    RequestAlertLog.i("canUseFullScreenIntent result=$canFsi")
     val notification = buildNotification(payload)
-    if (Build.VERSION.SDK_INT >= 34) {
-      startForeground(
-        NOTIFICATION_ID,
-        notification,
-        ServiceInfo.FOREGROUND_SERVICE_TYPE_MEDIA_PLAYBACK,
-      )
-    } else {
-      startForeground(NOTIFICATION_ID, notification)
+    try {
+      if (Build.VERSION.SDK_INT >= 34) {
+        startForeground(
+          NOTIFICATION_ID,
+          notification,
+          ServiceInfo.FOREGROUND_SERVICE_TYPE_MEDIA_PLAYBACK,
+        )
+      } else {
+        startForeground(NOTIFICATION_ID, notification)
+      }
+      RequestAlertLog.i("startForeground and notification post success")
+    } catch (error: Throwable) {
+      RequestAlertLog.e("startForeground and notification post failure", error)
     }
     acquireWakeLock()
     startLoopingSound()
@@ -73,7 +80,10 @@ class RequestAlertRingingService : Service() {
       MediaPlayer.create(this, resId)
     } else {
       MediaPlayer.create(this, resources.getIdentifier(SOUND_RESOURCE, "raw", applicationContext.packageName))
-    } ?: return
+    } ?: run {
+      RequestAlertLog.e("MediaPlayer create failed")
+      return
+    }
     player.isLooping = true
     player.setAudioAttributes(
       AudioAttributes.Builder()
@@ -115,6 +125,12 @@ class RequestAlertRingingService : Service() {
     // Only the Pick/Snooze actions above do that. Full-screen intent is best-effort:
     // OEM/permission suppression must still leave this heads-up + ring intact.
     return builder.build()
+  }
+
+  private fun canUseFullScreenIntent(): Boolean {
+    if (Build.VERSION.SDK_INT < 34) return true
+    val nm = getSystemService(NotificationManager::class.java)
+    return nm?.canUseFullScreenIntent() == true
   }
 
   private fun bodyTapPendingIntent(): PendingIntent? {
@@ -210,14 +226,20 @@ class RequestAlertRingingService : Service() {
       val id = payload.requestId
       synchronized(startLock) {
         if (id.isNotBlank() && activeRequestId == id) {
-          // Same request is already ringing — skip a duplicate FCM delivery.
+          RequestAlertLog.i("duplicate rejection")
           return
         }
         activeRequestId = id.ifBlank { activeRequestId }
       }
       RequestAlertModule.emitIncoming(payload)
       val intent = Intent(context, RequestAlertRingingService::class.java).putExtras(payload.toBundle())
-      ContextCompat.startForegroundService(context, intent)
+      try {
+        RequestAlertLog.i("RequestAlertRingingService start attempt")
+        ContextCompat.startForegroundService(context, intent)
+        RequestAlertLog.i("RequestAlertRingingService startForegroundService issued")
+      } catch (error: Throwable) {
+        RequestAlertLog.e("RequestAlertRingingService start failure", error)
+      }
     }
 
     fun stop(context: Context, requestId: String? = null) {
