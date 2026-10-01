@@ -9,14 +9,66 @@ export const ACTION_OPEN_REQUEST = 'OPEN_REQUEST';
 export const ACTION_SNOOZE = 'SNOOZE';
 export const DEFAULT_NOTIFICATION_ACTION = 'expo.modules.notifications.actions.DEFAULT';
 
+function stringifyField(value) {
+  if (value == null) return '';
+  if (typeof value === 'string' || typeof value === 'number' || typeof value === 'boolean') {
+    return String(value).trim();
+  }
+  return '';
+}
+
+function mergePlainObject(target, source) {
+  if (!source || typeof source !== 'object' || Array.isArray(source)) return;
+  Object.entries(source).forEach(([key, value]) => {
+    if (value && typeof value === 'object' && !Array.isArray(value)) {
+      if (key === 'data') mergePlainObject(target, value);
+      return;
+    }
+    const text = stringifyField(value);
+    if (text) target[key] = text;
+  });
+}
+
+/**
+ * Expo SDK 54 puts website custom fields in RemoteMessage.data["body"] as a
+ * JSON string (NotificationData.body). Flatten that JSON and a nested "data"
+ * object so classification can see type=branch_request and request fields.
+ */
+export function flattenExpoNotificationData(data) {
+  if (!data || typeof data !== 'object' || Array.isArray(data)) return {};
+  const flat = {};
+  Object.entries(data).forEach(([key, value]) => {
+    const text = stringifyField(value);
+    if (text) flat[key] = text;
+  });
+  let bodyObj = null;
+  const rawBody = data.body;
+  if (rawBody && typeof rawBody === 'object' && !Array.isArray(rawBody)) {
+    bodyObj = rawBody;
+  } else if (typeof rawBody === 'string' && rawBody.trim().startsWith('{')) {
+    try {
+      bodyObj = JSON.parse(rawBody);
+    } catch (_error) {
+      bodyObj = null;
+    }
+  }
+  if (bodyObj && typeof bodyObj === 'object' && !Array.isArray(bodyObj)) {
+    mergePlainObject(flat, bodyObj);
+    if (bodyObj.data && typeof bodyObj.data === 'object' && !Array.isArray(bodyObj.data)) {
+      mergePlainObject(flat, bodyObj.data);
+    }
+  }
+  return flat;
+}
+
+export function resolveNotificationData(data) {
+  return flattenExpoNotificationData(data);
+}
+
 export function isBranchRequest(data) {
-  if (!data || typeof data !== 'object') return false;
-  return (
-    data.type === 'branch_request' ||
-    data.screen === 'request' ||
-    Boolean(data.request_group_key) ||
-    Boolean(data.request_number)
-  );
+  const flat = flattenExpoNotificationData(data);
+  if (flat.type === 'auto_perpetual') return false;
+  return flat.type === 'branch_request';
 }
 
 export function formatSlaRemaining(deadlineOrSeconds, nowMs = Date.now()) {

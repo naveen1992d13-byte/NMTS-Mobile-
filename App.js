@@ -82,7 +82,7 @@ import StockAvailabilityScreen from './src/components/StockAvailabilityScreen';
 import MultiPartSearchScreen from './src/components/MultiPartSearchScreen';
 import MandatoryUpdateScreen from './src/components/MandatoryUpdateScreen';
 import IncomingRequestPopup from './src/components/IncomingRequestPopup';
-import { buildIncomingAlert, findRequestGroup, formatSlaRemaining, isBranchRequest } from './src/utils/requestAlert';
+import { buildIncomingAlert, findRequestGroup, formatSlaRemaining, isBranchRequest, resolveNotificationData } from './src/utils/requestAlert';
 import {
   Empty,
   Field,
@@ -370,8 +370,9 @@ export default function App() {
   }, [session?.deviceId, loadNotifications]);
 
   const showIncomingFromPush = useCallback(async (data, notification) => {
-    if (!isBranchRequest(data)) return;
-    const key = String(data.request_group_key || data.requestId || data.request_number || '');
+    const payload = resolveNotificationData(data);
+    if (!isBranchRequest(payload)) return;
+    const key = String(payload.request_group_key || payload.requestId || payload.request_number || '');
     if (key && incomingShownKeyRef.current === key && incomingAlertRef.current) return;
     if (key) incomingShownKeyRef.current = key;
     incomingNotificationRef.current = notification || incomingNotificationRef.current || null;
@@ -380,8 +381,8 @@ export default function App() {
       rows = (await getNotifications()) || rows;
       setNotifications(rows);
     } catch (_e) {}
-    const group = findRequestGroup(rows, data);
-    const alert = buildIncomingAlert(data, sessionRef.current, group);
+    const group = findRequestGroup(rows, payload);
+    const alert = buildIncomingAlert(payload, sessionRef.current, group);
     incomingAlertRef.current = alert;
     setIncomingAlert(alert);
   }, []);

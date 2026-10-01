@@ -14,6 +14,7 @@ import {
   isBranchRequest,
   isPickAction,
   isSnoozeAction,
+  resolveNotificationData,
 } from '../utils/requestAlert';
 
 let responseListenerSub = null;
@@ -159,7 +160,8 @@ export async function initPushNotifications({
 
   receivedListenerSub = Notifications.addNotificationReceivedListener((notification) => {
     try {
-      onNotificationReceived?.(notification.request.content.data, notification);
+      const data = resolveNotificationData(notification.request.content.data);
+      onNotificationReceived?.(data, notification);
     } catch (error) {
       console.log('[push] onNotificationReceived handler error', error);
     }
@@ -169,7 +171,7 @@ export async function initPushNotifications({
     const responseId = `${responseKey(response)}:${response?.actionIdentifier || ''}`;
     if (responseId && responseId === lastHandledResponseId) return;
     lastHandledResponseId = responseId;
-    const data = response?.notification?.request?.content?.data || {};
+    const data = resolveNotificationData(response?.notification?.request?.content?.data || {});
     if (isSnoozeAction(response?.actionIdentifier)) {
       onNotificationSnoozed?.(data, response);
       return;

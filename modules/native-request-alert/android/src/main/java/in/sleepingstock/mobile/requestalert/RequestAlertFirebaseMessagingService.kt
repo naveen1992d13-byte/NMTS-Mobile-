@@ -25,13 +25,11 @@ class RequestAlertFirebaseMessagingService : FirebaseMessagingService() {
     val isBranchRequest = payload != null
     RequestAlertLog.i("branch_request classification result=$isBranchRequest")
     if (payload != null) {
-      RequestAlertLog.i(
-        "parsed requestId_present=${payload.requestId.isNotBlank()} " +
-          "request_group_key_alias_present=${payload.requestId.isNotBlank()}"
-      )
+      RequestAlertLog.i("RequestAlertRingingService start decision=start")
       RequestAlertRingingService.startNow(this, payload)
       return
     }
+    RequestAlertLog.i("RequestAlertRingingService start decision=skip")
     RequestAlertLog.i("delegating non-branch_request to Expo FirebaseMessagingDelegate")
     forwardToExpo(remoteMessage)
   }

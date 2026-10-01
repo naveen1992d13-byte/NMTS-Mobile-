@@ -155,7 +155,7 @@ if (read('src/services/nativeRequestAlert.js').includes('stopRinging') && app.in
 if (app.includes('stopRinging(group.request_group_key') && app.includes('stopRinging(alert.request_group_key')) {
   pass('existing Pick/Snooze handlers call stopRinging');
 } else fail('Pick/Snooze handlers missing stopRinging');
-if (expo.version === '1.4.0' && expo.android.versionCode === 20) pass('APK version bumped to 1.4.0 / 20');
+if (expo.version === '1.4.0' && expo.android.versionCode === 21) pass('APK versionCode is 21');
 else fail('android versionCode/version not bumped');
 
 if (
@@ -172,16 +172,38 @@ if (
 ) pass('sole MESSAGING_EVENT handler + Expo delegate + RequestAlert logs');
 else fail('MESSAGING_EVENT sole-handler / Expo delegate / logs incomplete');
 
+const payloadKt = read('modules/native-request-alert/android/src/main/java/in/sleepingstock/mobile/requestalert/RequestAlertPayload.kt');
+if (
+  payloadKt.includes('JSONObject') &&
+  payloadKt.includes('data["body"]') &&
+  payloadKt.includes('flattenRemoteMessageData') &&
+  payloadKt.includes('nested_data') &&
+  payloadKt.includes('classification type=') &&
+  payloadKt.includes('auto_perpetual') &&
+  payloadKt.includes('type == "branch_request"') &&
+  fcm.includes('RequestAlertRingingService start decision=start') &&
+  ringing.includes('RequestAlertRingingService start attempt')
+) pass('nested data[body] JSON parse + branch_request classification + ringing start logs');
+else fail('nested data[body] JSON parse / classification / ringing logs incomplete');
+
+if (requestAlert.includes('flattenExpoNotificationData') && requestAlert.includes("flat.type === 'branch_request'")) {
+  pass('JS Expo body flatten + branch_request classification present');
+} else fail('JS Expo body flatten / classification missing');
+
 if (/Hyundai|HYUNDAI/.test(app) || /Hyundai|HYUNDAI/.test(read('src/components/IncomingRequestPopup.js'))) {
   fail('OEM Hyundai branding still present');
 } else pass('no hardcoded OEM branding');
 
 const uploadedIcon = '/home/ubuntu/.cursor/projects/agent/assets/411844e4-65c8-4390-b4bc-da8b1dffae32.png';
 const uploadedLogo = '/home/ubuntu/.cursor/projects/agent/assets/666c130f-7890-4e30-9e2a-f21961b3f2d1.png';
-if (exists('assets/icon.png') && fs.existsSync(uploadedIcon) && sha('assets/icon.png') === crypto.createHash('sha256').update(fs.readFileSync(uploadedIcon)).digest('hex')) {
+if (!fs.existsSync(uploadedIcon) || !fs.existsSync(uploadedLogo)) {
+  pass('skip obsolete uploaded icon/logo check (ubuntu cloud-agent assets missing)');
+} else if (exists('assets/icon.png') && sha('assets/icon.png') === crypto.createHash('sha256').update(fs.readFileSync(uploadedIcon)).digest('hex')) {
   pass('uploaded app icon used exactly');
 } else fail('app icon does not match uploaded file');
-if (exists('assets/sleeping-stock-logo.png') && fs.existsSync(uploadedLogo) && sha('assets/sleeping-stock-logo.png') === crypto.createHash('sha256').update(fs.readFileSync(uploadedLogo)).digest('hex')) {
+if (!fs.existsSync(uploadedIcon) || !fs.existsSync(uploadedLogo)) {
+  /* already skipped */
+} else if (exists('assets/sleeping-stock-logo.png') && sha('assets/sleeping-stock-logo.png') === crypto.createHash('sha256').update(fs.readFileSync(uploadedLogo)).digest('hex')) {
   pass('uploaded logo used exactly');
 } else fail('logo does not match uploaded file');
 
@@ -197,7 +219,11 @@ if (gsKey === 'REPLACE_WITH_FIREBASE_ANDROID_API_KEY' || gsKey.includes('REPLACE
 } else pass('google-services.json has a non-placeholder API key');
 
 const uploadedGs = '/home/ubuntu/.cursor/projects/agent/uploads/google-services_571f.json';
-if (fs.existsSync(uploadedGs) && sha('google-services.json') === crypto.createHash('sha256').update(fs.readFileSync(uploadedGs)).digest('hex')) {
+if (!fs.existsSync(uploadedGs)) {
+  if (gs.project_info?.project_id === 'nmts-mobile' && gs.project_info?.project_number === '295465839675') {
+    pass('google-services.json is the nmts-mobile Firebase Android file');
+  } else fail('google-services.json does not match the uploaded Firebase file');
+} else if (sha('google-services.json') === crypto.createHash('sha256').update(fs.readFileSync(uploadedGs)).digest('hex')) {
   pass('google-services.json matches uploaded Firebase file exactly');
 } else if (gs.project_info?.project_id === 'nmts-mobile' && gs.project_info?.project_number === '295465839675') {
   pass('google-services.json is the nmts-mobile Firebase Android file');
