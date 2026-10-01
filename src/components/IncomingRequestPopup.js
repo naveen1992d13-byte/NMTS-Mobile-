@@ -4,6 +4,21 @@ import { BORDER, CARD_SOLID, MUTED, NEON_CYAN, NEON_YELLOW, TEXT } from '../them
 
 export default function IncomingRequestPopup({ visible, alert, onPick, onSnooze }) {
   if (!alert) return null;
+  const status = String(alert.status || 'pending').toLowerCase();
+  const canPick = status === 'pending';
+  const skipAllowed = alert.skip_allowed !== false && canPick;
+  const owner = alert.picked_by_name || '';
+  const statusText =
+    status === 'picked' && owner
+      ? `PICKED by ${owner}`
+      : status === 'accepted' && owner
+        ? `ACCEPTED by ${owner}`
+        : status === 'rejected' && owner
+          ? `REJECTED by ${owner}`
+          : status === 'expired'
+            ? 'EXPIRED – NO RESPONSE'
+            : alert.status_label || '';
+
   return (
     <Modal visible={visible} transparent animationType="fade" onRequestClose={onSnooze}>
       <View style={styles.backdrop}>
@@ -29,14 +44,24 @@ export default function IncomingRequestPopup({ visible, alert, onPick, onSnooze 
             </View>
           </View>
 
-          <View style={styles.actions}>
-            <TouchableOpacity style={styles.snooze} onPress={onSnooze}>
-              <Text style={styles.snoozeText}>SNOOZE</Text>
+          {!canPick && Boolean(statusText) && <Text style={styles.ownerNote}>{statusText}</Text>}
+
+          {canPick ? (
+            <View style={styles.actions}>
+              {skipAllowed ? (
+                <TouchableOpacity style={styles.snooze} onPress={onSnooze}>
+                  <Text style={styles.snoozeText}>SNOOZE</Text>
+                </TouchableOpacity>
+              ) : null}
+              <TouchableOpacity style={[styles.pick, !skipAllowed && styles.pickSolo]} onPress={onPick}>
+                <Text style={styles.pickText}>PICK</Text>
+              </TouchableOpacity>
+            </View>
+          ) : (
+            <TouchableOpacity style={styles.dismiss} onPress={onSnooze}>
+              <Text style={styles.snoozeText}>DISMISS</Text>
             </TouchableOpacity>
-            <TouchableOpacity style={styles.pick} onPress={onPick}>
-              <Text style={styles.pickText}>PICK</Text>
-            </TouchableOpacity>
-          </View>
+          )}
         </View>
       </View>
     </Modal>
@@ -71,6 +96,7 @@ const styles = StyleSheet.create({
   metaRow: { flexDirection: 'row', marginTop: 4, marginBottom: 18 },
   metaBox: { flex: 1 },
   metaValue: { marginTop: 4, color: TEXT, fontSize: 16, fontWeight: '900' },
+  ownerNote: { color: NEON_YELLOW, fontWeight: '800', marginBottom: 14, fontSize: 13 },
   actions: { flexDirection: 'row' },
   snooze: {
     flex: 1,
@@ -91,5 +117,14 @@ const styles = StyleSheet.create({
     alignItems: 'center',
     justifyContent: 'center',
   },
+  pickSolo: { flex: 1 },
   pickText: { color: '#041018', fontWeight: '900' },
+  dismiss: {
+    minHeight: 48,
+    borderRadius: 14,
+    borderWidth: 1,
+    borderColor: BORDER,
+    alignItems: 'center',
+    justifyContent: 'center',
+  },
 });

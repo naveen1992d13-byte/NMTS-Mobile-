@@ -87,8 +87,8 @@ class RequestAlertRingingService : Service() {
     player.isLooping = true
     player.setAudioAttributes(
       AudioAttributes.Builder()
-        .setUsage(AudioAttributes.USAGE_MEDIA)
-        .setContentType(AudioAttributes.CONTENT_TYPE_MUSIC)
+        .setUsage(AudioAttributes.USAGE_NOTIFICATION_RINGTONE)
+        .setContentType(AudioAttributes.CONTENT_TYPE_SONIFICATION)
         .build()
     )
     player.setVolume(1f, 1f)

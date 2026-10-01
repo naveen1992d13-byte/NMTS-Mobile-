@@ -113,6 +113,7 @@ export function buildIncomingAlert(data, session, group) {
     payload.requested_branch ||
     row.requesting_branch ||
     '—';
+  const status = String(row.status || payload.status || 'pending').toLowerCase();
   return {
     request_group_key: payload.request_group_key || row.request_group_key || '',
     request_number: payload.request_number || row.request_number || '—',
@@ -126,9 +127,51 @@ export function buildIncomingAlert(data, session, group) {
     sla_label: formatSlaRemaining(
       payload.sla_remaining_seconds ?? payload.response_deadline ?? row.response_deadline
     ),
+    status,
+    status_label: row.status_label || statusLabelFor(status),
+    picked_by_name: row.picked_by_name || row.accepted_by_device_user_name || '',
+    skip_allowed: row.skip_allowed !== false && status === 'pending',
     group: row,
     data: payload,
   };
+}
+
+export function requestStatus(row) {
+  return String(row?.status || 'pending').toLowerCase();
+}
+
+export function statusLabelFor(status) {
+  const key = String(status || 'pending').toLowerCase();
+  if (key === 'picked') return 'PICKED';
+  if (key === 'accepted') return 'ACCEPTED';
+  if (key === 'rejected') return 'REJECTED';
+  if (key === 'expired') return 'EXPIRED – NO RESPONSE';
+  return 'NEW';
+}
+
+export function ownerName(row) {
+  return (
+    row?.picked_by_name ||
+    row?.accepted_by_name ||
+    row?.rejected_by_name ||
+    row?.accepted_by_device_user_name ||
+    ''
+  );
+}
+
+export function canPickRequest(row) {
+  if (row?.can_pick != null) return Boolean(row.can_pick);
+  return requestStatus(row) === 'pending' && !row?.accepted_by_another;
+}
+
+export function canEditRequest(row) {
+  if (row?.can_edit != null) return Boolean(row.can_edit);
+  return Boolean(row?.accepted_by_me) && requestStatus(row) === 'picked';
+}
+
+export function canSnoozeRequest(row) {
+  if (row?.skip_allowed != null) return Boolean(row.skip_allowed);
+  return requestStatus(row) === 'pending' && Number(row?.my_skip_count || 0) < 2;
 }
 
 export function isSnoozeAction(actionIdentifier) {

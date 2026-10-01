@@ -48,7 +48,13 @@ async function resolveAuthContext(overrideUrl) {
 function errorDetailText(error) {
   const detail = error?.response?.data?.detail;
   if (typeof detail === 'string') return detail;
-  if (detail?.message) return detail.message;
+  if (detail && typeof detail === 'object') {
+    const message = detail.message || '';
+    const picked = detail.picked_by_name;
+    if (message && picked && !message.includes(picked)) return `${message} (${picked})`;
+    if (message) return message;
+    if (picked) return `Already picked by ${picked}`;
+  }
   return error?.message || '';
 }
 
@@ -130,6 +136,9 @@ export const registerPushToken = (pushToken) => request('put', '/mobile/devices/
 export const getNotifications = () => request('get', '/mobile/notifications');
 export const acceptNotification = (requestGroupKey) => request('post', '/mobile/notifications/accept', { data: { request_group_key: requestGroupKey } });
 export const skipNotification = (requestGroupKey) => request('post', '/mobile/notifications/skip', { data: { request_group_key: requestGroupKey } });
+export const rejectNotification = (requestGroupKey, reason) => request('post', '/mobile/notifications/reject', {
+  data: { request_group_key: requestGroupKey, reason },
+});
 export const submitPartResponse = (requestGroupKey, parts) => request('post', '/mobile/notifications/respond', {
   data: {
     request_group_key: requestGroupKey,

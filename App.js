@@ -37,6 +37,7 @@ import {
   getNotifications,
   acceptNotification,
   skipNotification,
+  rejectNotification,
   submitPartResponse,
   searchStock,
   getLatestAppVersion,
@@ -82,7 +83,7 @@ import StockAvailabilityScreen from './src/components/StockAvailabilityScreen';
 import MultiPartSearchScreen from './src/components/MultiPartSearchScreen';
 import MandatoryUpdateScreen from './src/components/MandatoryUpdateScreen';
 import IncomingRequestPopup from './src/components/IncomingRequestPopup';
-import { buildIncomingAlert, findRequestGroup, formatSlaRemaining, isBranchRequest, resolveNotificationData } from './src/utils/requestAlert';
+import { buildIncomingAlert, canEditRequest, canPickRequest, canSnoozeRequest, findRequestGroup, formatSlaRemaining, isBranchRequest, ownerName, requestStatus, resolveNotificationData, statusLabelFor } from './src/utils/requestAlert';
 import {
   Empty,
   Field,
@@ -338,11 +339,25 @@ export default function App() {
       const list = rows || [];
       setNotifications(list);
       notificationsRef.current = list;
+      const currentAlert = incomingAlertRef.current;
+      if (currentAlert) {
+        const group = findRequestGroup(list, currentAlert);
+        if (group) {
+          const next = buildIncomingAlert(currentAlert.data || currentAlert, sessionRef.current, group);
+          incomingAlertRef.current = next;
+          setIncomingAlert(next);
+          if (requestStatus(group) !== 'pending') {
+            stopRinging(group.request_group_key || group.request_number);
+            stopRequestRingtone();
+          }
+        }
+      }
       const live = list.find((row) => {
+        if (requestStatus(row) !== 'pending') return false;
         const key = row.request_group_key || row.request_number;
         return key && !snoozedRequestKeysRef.current.has(key);
       });
-      if (live && screenRef.current !== 'request') {
+      if (live && screenRef.current !== 'request' && !incomingAlertRef.current) {
         startRequestRingtone(live.request_group_key || live.request_number);
       }
     } catch (error) {
@@ -389,6 +404,21 @@ export default function App() {
 
   const snoozeIncomingAlert = useCallback(async (data) => {
     const alert = data || incomingAlert || {};
+    const pending = requestStatus(alert) === 'pending' || !alert.status;
+    const skipAllowed = alert.skip_allowed !== false && pending;
+    if (pending && !skipAllowed) {
+      Alert.alert('Snooze unavailable', 'This is the third alert — pick or reject this request.');
+      return;
+    }
+    if (skipAllowed && alert.request_group_key) {
+      try {
+        await skipNotification(alert.request_group_key);
+      } catch (error) {
+        Alert.alert('Unable to Snooze', friendlyError(error));
+        loadNotificationsRef.current?.();
+        return;
+      }
+    }
     incomingShownKeyRef.current = null;
     incomingAlertRef.current = null;
     stopRinging(alert.request_group_key || alert.requestId || alert.request_number);
@@ -399,6 +429,7 @@ export default function App() {
     if (alert.request_number) snoozedRequestKeysRef.current.add(alert.request_number);
     await stopRequestRingtone();
     setIncomingAlert(null);
+    loadNotificationsRef.current?.();
   }, [incomingAlert]);
 
   const pickIncomingFromPush = useCallback(async (data) => {
@@ -420,7 +451,7 @@ export default function App() {
     if (!session?.deviceId) return undefined;
     let teardown = () => {};
     const pickSub = addNativePickListener((data) => {
-      pickIncomingFromPush(data);
+      showIncomingFromPush(data);
     });
     const snoozeSub = addNativeSnoozeListener((data) => {
       snoozeIncomingAlert(data);
@@ -528,7 +559,7 @@ export default function App() {
         }
       },
       onNotificationPicked: (data) => {
-        pickIncomingFromPush(data);
+        showIncomingFromPush(data);
       },
       onNotificationSnoozed: (data) => {
         snoozeIncomingAlert(data);
@@ -639,6 +670,45 @@ export default function App() {
   useEffect(() => {
     if (screen === 'notifications') loadNotifications();
   }, [screen, loadNotifications]);
+
+  useEffect(() => {
+    if (!session?.deviceId) return undefined;
+    const watch = screen === 'notifications' || screen === 'request' || Boolean(incomingAlert);
+    if (!watch) return undefined;
+    const timer = setInterval(() => loadNotificationsRef.current?.(), 8000);
+    return () => clearInterval(timer);
+  }, [session?.deviceId, screen, incomingAlert]);
+
+  useEffect(() => {
+    if (!selectedRequest?.request_group_key) return;
+    const next = notifications.find((row) => row.request_group_key === selectedRequest.request_group_key);
+    if (!next) return;
+    if (
+      next.status !== selectedRequest.status ||
+      next.picked_by_name !== selectedRequest.picked_by_name ||
+      next.accepted_by_me !== selectedRequest.accepted_by_me ||
+      next.rejection_reason !== selectedRequest.rejection_reason
+    ) {
+      setSelectedRequest(next);
+      if (!canEditRequest(next) && canEditRequest(selectedRequest)) {
+        setRequestRows(
+          (next.parts || []).map((part) => ({
+            orderRequestId: part.order_request_id,
+            partNumber: part.part_number,
+            partName: part.description || part.part_name || '-',
+            requestedQty: numberValue(part.requested_qty),
+            availableQty: numberValue(part.available_qty_at_request ?? part.available_qty),
+            loc: requestPartLoc(part),
+            purchaseAging: part.purchase_aging_days ?? part.purchase_aging ?? '-',
+            salesAging: part.sales_aging_days ?? part.sales_aging ?? '-',
+            value: numberValue(part.part_value ?? part.value),
+            acceptedQty: String(part.accepted_qty ?? part.requested_qty ?? 0),
+            remark: part.remark || '',
+          }))
+        );
+      }
+    }
+  }, [notifications, selectedRequest]);
 
   const pairDevice = async ({ qrMobileUserId, pairingType, qrPairingCode, apiBaseUrl, pairingToken }) => {
     if (!userName.trim() || !mobileNumber.trim()) {
@@ -1078,6 +1148,16 @@ export default function App() {
   };
 
   const pickRequest = async (group) => {
+    if (!canPickRequest(group) && !group?.accepted_by_me) {
+      Alert.alert(
+        requestStatus(group) === 'picked' ? 'Already Picked' : 'Unavailable',
+        requestStatus(group) === 'picked'
+          ? `Picked by ${ownerName(group) || 'another device'}`
+          : statusLabelFor(requestStatus(group))
+      );
+      loadNotifications();
+      return;
+    }
     setRequestBusy(true);
     try {
       incomingShownKeyRef.current = null;
@@ -1091,9 +1171,17 @@ export default function App() {
       stopRequestRingtone();
       if (group.request_group_key) snoozedRequestKeysRef.current.add(group.request_group_key);
       if (group.request_number) snoozedRequestKeysRef.current.add(group.request_number);
-      openRequest(group);
+      const rows = await getNotifications().catch(() => notificationsRef.current || []);
+      setNotifications(rows || []);
+      notificationsRef.current = rows || [];
+      const next = findRequestGroup(rows, group) || { ...group, status: 'picked', accepted_by_me: true, can_edit: true };
+      openRequest(next);
     } catch (error) {
-      Alert.alert(error?.status === 409 ? 'Already Picked' : 'Unable to Pick', friendlyError(error));
+      const name = error?.data?.detail?.picked_by_name;
+      Alert.alert(
+        error?.status === 409 ? 'Already Picked' : 'Unable to Pick',
+        name ? `Picked by ${name}` : friendlyError(error)
+      );
       loadNotifications();
     } finally {
       setRequestBusy(false);
@@ -1101,6 +1189,10 @@ export default function App() {
   };
 
   const snoozeRequest = async (group) => {
+    if (!canSnoozeRequest(group)) {
+      Alert.alert('Snooze unavailable', 'This is the third alert — pick or reject this request.');
+      return;
+    }
     try {
       stopRinging(group.request_group_key || group.request_number);
       const result = await skipNotification(group.request_group_key);
@@ -1112,6 +1204,7 @@ export default function App() {
       loadNotifications();
     } catch (error) {
       Alert.alert('Unable to Snooze', friendlyError(error));
+      loadNotifications();
     }
   };
 
@@ -1121,6 +1214,7 @@ export default function App() {
     stopRinging(group?.request_group_key || group?.request_number);
     stopRequestRingtone();
     setSelectedRequest(group);
+    const editable = canEditRequest(group);
     setRequestRows(
       (group.parts || []).map((part) => ({
         orderRequestId: part.order_request_id,
@@ -1132,8 +1226,8 @@ export default function App() {
         purchaseAging: part.purchase_aging_days ?? part.purchase_aging ?? '-',
         salesAging: part.sales_aging_days ?? part.sales_aging ?? '-',
         value: numberValue(part.part_value ?? part.value),
-        acceptedQty: String(part.requested_qty ?? 0),
-        remark: '',
+        acceptedQty: String(editable ? (part.requested_qty ?? 0) : (part.accepted_qty ?? part.requested_qty ?? 0)),
+        remark: part.remark || '',
       }))
     );
     setScreen('request');
@@ -1145,6 +1239,13 @@ export default function App() {
   });
 
   const submitRequestResponse = async () => {
+    if (!canEditRequest(selectedRequest)) {
+      Alert.alert(
+        'Already Picked',
+        `This request is locked${ownerName(selectedRequest) ? ` by ${ownerName(selectedRequest)}` : ''}.`
+      );
+      return;
+    }
     for (const row of requestRows) {
       const qty = numberValue(row.acceptedQty);
       if (qty < 0 || qty > row.requestedQty) {
@@ -1168,9 +1269,38 @@ export default function App() {
         }))
       );
       Alert.alert('Submitted', 'Request response submitted successfully.');
+      loadNotifications();
       setScreen('notifications');
     } catch (error) {
       Alert.alert('Submit Failed', friendlyError(error));
+      loadNotifications();
+    } finally {
+      setRequestBusy(false);
+    }
+  };
+
+  const rejectRequest = async (reason) => {
+    if (!canEditRequest(selectedRequest)) {
+      Alert.alert(
+        'Already Picked',
+        `This request is locked${ownerName(selectedRequest) ? ` by ${ownerName(selectedRequest)}` : ''}.`
+      );
+      return;
+    }
+    const text = String(reason || '').trim();
+    if (!text) {
+      Alert.alert('Reason required', 'Enter a rejection reason.');
+      return;
+    }
+    setRequestBusy(true);
+    try {
+      await rejectNotification(selectedRequest.request_group_key, text);
+      Alert.alert('Rejected', 'Request rejected.');
+      loadNotifications();
+      setScreen('notifications');
+    } catch (error) {
+      Alert.alert('Reject Failed', friendlyError(error));
+      loadNotifications();
     } finally {
       setRequestBusy(false);
     }
@@ -1230,7 +1360,7 @@ export default function App() {
           <HomeScreen
             session={session}
             pendingCount={pendingCount}
-            notificationCount={notifications.length}
+            notificationCount={notifications.filter((row) => requestStatus(row) === 'pending').length}
             navigate={setScreen}
             logout={logout}
           />
@@ -1325,7 +1455,9 @@ export default function App() {
             setRequestRows((items) => items.map((x) => (x.orderRequestId === id ? { ...x, [field]: value } : x)))
           }
           onSubmit={submitRequestResponse}
+          onReject={rejectRequest}
           busy={requestBusy}
+          canEdit={canEditRequest(selectedRequest)}
         />
       )}
       {screen === 'scanner' &&
@@ -1588,35 +1720,60 @@ function NotificationsScreen({ onBack, rows, busy, refresh, openRequest, pickReq
         keyExtractor={(item) => item.request_group_key}
         contentContainerStyle={styles.listContent}
         ListEmptyComponent={!busy ? <Empty text="No pending request for your branch." /> : null}
-        renderItem={({ item }) => (
-          <TouchableOpacity style={styles.requestCard} onPress={() => openRequest(item)}>
-            <View style={styles.rowBetween}>
-              <Text style={styles.requestNo}>{item.request_number}</Text>
-              <Text style={styles.newBadge}>NEW</Text>
-            </View>
-            <Text style={styles.requestFrom}>From: {item.requesting_dealer || '-'} / {item.requesting_branch || '-'}</Text>
-            <Text style={styles.requestFrom}>To: {item.supplying_dealer || '-'} / {item.supplying_branch || '-'}</Text>
-            <Text style={styles.requestMeta}>
-              Items: {item.total_items || 0}    Qty: {item.total_quantity || 0}    SLA: {formatSlaRemaining(item.response_deadline)}
-            </Text>
-            <View style={styles.requestActions}>
-              <TouchableOpacity style={styles.snoozeButton} onPress={() => snoozeRequest(item)}>
-                <Text style={styles.snoozeText}>Snooze</Text>
-              </TouchableOpacity>
-              <TouchableOpacity style={styles.pickButton} onPress={() => pickRequest(item)}>
-                <Text style={styles.pickText}>Pick Request</Text>
-              </TouchableOpacity>
-            </View>
-          </TouchableOpacity>
-        )}
+        renderItem={({ item }) => {
+          const status = requestStatus(item);
+          const label = item.status_label || statusLabelFor(status);
+          const owner = ownerName(item);
+          const showPick = canPickRequest(item);
+          const showSnooze = canSnoozeRequest(item);
+          return (
+            <TouchableOpacity style={styles.requestCard} onPress={() => openRequest(item)}>
+              <View style={styles.rowBetween}>
+                <Text style={styles.requestNo}>{item.request_number}</Text>
+                <Text style={[styles.newBadge, status !== 'pending' && styles.statusBadgeMuted]}>{label}</Text>
+              </View>
+              <Text style={styles.requestFrom}>From: {item.requesting_dealer || '-'} / {item.requesting_branch || '-'}</Text>
+              <Text style={styles.requestFrom}>To: {item.supplying_dealer || '-'} / {item.supplying_branch || '-'}</Text>
+              {owner ? (
+                <Text style={styles.requestOwner}>
+                  {status === 'accepted' ? 'Accepted by' : status === 'rejected' ? 'Rejected by' : 'Picked by'} {owner}
+                </Text>
+              ) : null}
+              {status === 'rejected' && item.rejection_reason ? (
+                <Text style={styles.requestOwner}>Reason: {item.rejection_reason}</Text>
+              ) : null}
+              <Text style={styles.requestMeta}>
+                Items: {item.total_items || 0}    Qty: {item.total_quantity || 0}    SLA: {formatSlaRemaining(item.response_deadline)}
+              </Text>
+              {(showPick || showSnooze) && (
+                <View style={styles.requestActions}>
+                  {showSnooze ? (
+                    <TouchableOpacity style={styles.snoozeButton} onPress={() => snoozeRequest(item)}>
+                      <Text style={styles.snoozeText}>Snooze</Text>
+                    </TouchableOpacity>
+                  ) : null}
+                  {showPick ? (
+                    <TouchableOpacity style={styles.pickButton} onPress={() => pickRequest(item)}>
+                      <Text style={styles.pickText}>Pick Request</Text>
+                    </TouchableOpacity>
+                  ) : null}
+                </View>
+              )}
+            </TouchableOpacity>
+          );
+        }}
       />
     </View>
   );
 }
 
-function RequestScreen({ onBack, request, rows, updateRow, onSubmit, busy }) {
+function RequestScreen({ onBack, request, rows, updateRow, onSubmit, onReject, busy, canEdit }) {
   const scrollRef = useRef(null);
   const qtyRefs = useRef({});
+  const [rejectReason, setRejectReason] = useState('');
+  const status = requestStatus(request);
+  const owner = ownerName(request);
+  const locked = !canEdit;
 
   const keepQtyVisible = (orderRequestId) => {
     const node = qtyRefs.current[orderRequestId];
@@ -1634,6 +1791,19 @@ function RequestScreen({ onBack, request, rows, updateRow, onSubmit, busy }) {
     }, Platform.OS === 'android' ? 280 : 80);
   };
 
+  const lockMessage =
+    status === 'expired'
+      ? 'EXPIRED – NO RESPONSE'
+      : status === 'picked' && owner
+        ? `Picked by ${owner}`
+        : status === 'accepted' && owner
+          ? `Accepted by ${owner}`
+          : status === 'rejected' && owner
+            ? `Rejected by ${owner}${request?.rejection_reason ? ` — ${request.rejection_reason}` : ''}`
+            : locked
+              ? 'Pick this request to edit and submit.'
+              : '';
+
   return (
     <KeyboardAvoidingView
       style={styles.flex}
@@ -1644,6 +1814,7 @@ function RequestScreen({ onBack, request, rows, updateRow, onSubmit, busy }) {
       <View style={styles.requestHeader}>
         <Text style={styles.requestHeaderNo}>{request?.request_number}</Text>
         <Text style={styles.requestHeaderSub}>{request?.requesting_branch || request?.requesting_dealer || '-'}</Text>
+        {lockMessage ? <Text style={styles.requestLockNote}>{lockMessage}</Text> : null}
       </View>
       <ScrollView
         ref={scrollRef}
@@ -1655,7 +1826,7 @@ function RequestScreen({ onBack, request, rows, updateRow, onSubmit, busy }) {
       >
         {rows.map((row) => {
           const accepted = numberValue(row.acceptedQty);
-          const status = accepted === row.requestedQty ? 'ACCEPTED' : accepted === 0 ? 'REJECTED' : 'PARTIAL';
+          const partStatus = accepted === row.requestedQty ? 'ACCEPTED' : accepted === 0 ? 'REJECTED' : 'PARTIAL';
           return (
             <View key={row.orderRequestId} style={styles.requestPartCard}>
               <Text style={styles.partNumberText}>{row.partNumber}</Text>
@@ -1672,38 +1843,66 @@ function RequestScreen({ onBack, request, rows, updateRow, onSubmit, busy }) {
                 </View>
                 <View style={styles.qtyField}>
                   <Text style={styles.qtyLabel}>Accepted Qty</Text>
-                  <TextInput
-                    ref={(el) => {
-                      qtyRefs.current[row.orderRequestId] = el;
-                    }}
-                    style={styles.acceptedQtyInput}
-                    value={row.acceptedQty}
-                    onChangeText={(v) => updateRow(row.orderRequestId, 'acceptedQty', v.replace(/[^0-9.]/g, ''))}
-                    keyboardType="decimal-pad"
-                    onFocus={() => keepQtyVisible(row.orderRequestId)}
-                  />
+                  {locked ? (
+                    <Text style={styles.qtyReadOnly}>{row.acceptedQty}</Text>
+                  ) : (
+                    <TextInput
+                      ref={(el) => {
+                        qtyRefs.current[row.orderRequestId] = el;
+                      }}
+                      style={styles.acceptedQtyInput}
+                      value={row.acceptedQty}
+                      onChangeText={(v) => updateRow(row.orderRequestId, 'acceptedQty', v.replace(/[^0-9.]/g, ''))}
+                      keyboardType="decimal-pad"
+                      onFocus={() => keepQtyVisible(row.orderRequestId)}
+                    />
+                  )}
                 </View>
               </View>
               <View style={styles.requestCardStatus}>
-                <StatusPill value={status} />
+                <StatusPill value={partStatus} />
               </View>
-              {status !== 'ACCEPTED' && (
-                <TextInput
-                  style={styles.remarkInput}
-                  value={row.remark}
-                  onChangeText={(v) => updateRow(row.orderRequestId, 'remark', v)}
-                  placeholder="Remark required"
-                  placeholderTextColor={MUTED}
-                  onFocus={() => keepQtyVisible(row.orderRequestId)}
-                />
+              {partStatus !== 'ACCEPTED' && (
+                locked ? (
+                  row.remark ? <Text style={styles.remarkReadOnly}>{row.remark}</Text> : null
+                ) : (
+                  <TextInput
+                    style={styles.remarkInput}
+                    value={row.remark}
+                    onChangeText={(v) => updateRow(row.orderRequestId, 'remark', v)}
+                    placeholder="Remark required"
+                    placeholderTextColor={MUTED}
+                    onFocus={() => keepQtyVisible(row.orderRequestId)}
+                  />
+                )
               )}
             </View>
           );
         })}
       </ScrollView>
-      <View style={styles.submitBar}>
-        <PrimaryButton title="Submit Request Response" onPress={onSubmit} busy={busy} />
-      </View>
+      {canEdit ? (
+        <View style={styles.submitBar}>
+          <TextInput
+            style={styles.remarkInput}
+            value={rejectReason}
+            onChangeText={setRejectReason}
+            placeholder="Rejection reason (required to reject)"
+            placeholderTextColor={MUTED}
+          />
+          <View style={styles.requestActions}>
+            <TouchableOpacity
+              style={styles.snoozeButton}
+              onPress={() => onReject(rejectReason)}
+              disabled={busy}
+            >
+              <Text style={styles.snoozeText}>Reject</Text>
+            </TouchableOpacity>
+            <View style={{ flex: 1.5 }}>
+              <PrimaryButton title="Submit Request Response" onPress={onSubmit} busy={busy} />
+            </View>
+          </View>
+        </View>
+      ) : null}
     </KeyboardAvoidingView>
   );
 }
@@ -2013,7 +2212,11 @@ const styles = StyleSheet.create({
   rowBetween: { flexDirection: 'row', justifyContent: 'space-between', alignItems: 'center' },
   requestNo: { color: DARK, fontSize: 16, fontWeight: '900' },
   newBadge: { paddingHorizontal: 8, paddingVertical: 4, borderRadius: 7, backgroundColor: DANGER, color: '#fff', fontSize: 9, fontWeight: '900', overflow: 'hidden' },
+  statusBadgeMuted: { backgroundColor: MUTED },
   requestFrom: { marginTop: 9, color: MUTED, fontSize: 12 },
+  requestOwner: { marginTop: 6, color: NEON_YELLOW, fontSize: 12, fontWeight: '800' },
+  requestLockNote: { marginTop: 8, color: NEON_YELLOW, fontSize: 12, fontWeight: '800', textAlign: 'center' },
+  remarkReadOnly: { marginTop: 8, color: MUTED, fontSize: 12 },
   requestMeta: { marginTop: 7, color: MUTED, fontSize: 11 },
   requestActions: { marginTop: 13, flexDirection: 'row' },
   snoozeButton: {

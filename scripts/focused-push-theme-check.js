@@ -155,7 +155,7 @@ if (read('src/services/nativeRequestAlert.js').includes('stopRinging') && app.in
 if (app.includes('stopRinging(group.request_group_key') && app.includes('stopRinging(alert.request_group_key')) {
   pass('existing Pick/Snooze handlers call stopRinging');
 } else fail('Pick/Snooze handlers missing stopRinging');
-if (expo.version === '1.4.0' && expo.android.versionCode === 21) pass('APK versionCode is 21');
+if (expo.version === '1.4.0' && expo.android.versionCode === 22) pass('APK versionCode is 22');
 else fail('android versionCode/version not bumped');
 
 if (
