@@ -1339,6 +1339,11 @@ export default function App() {
       Alert.alert('Unavailable', 'Only the owner can complete picking.');
       return;
     }
+    const unanswered = requestRows.some((row) => String(row.acceptedQty ?? '').trim() === '');
+    if (unanswered) {
+      Alert.alert('Response required', 'Enter an accepted quantity for every line before finishing picking.');
+      return;
+    }
     setRequestBusy(true);
     try {
       await completePicking(selectedRequest.request_group_key);
@@ -1913,25 +1918,28 @@ function NotificationsScreen({ onBack, rows, busy, refresh, openRequest, pickReq
           const owner = ownerName(item);
           const showPick = canPickRequest(item);
           const showSnooze = canSnoozeRequest(item);
+          const showOwner = owner && status !== 'pending';
           return (
-            <TouchableOpacity style={styles.requestCard} onPress={() => openRequest(item)}>
-              <View style={styles.rowBetween}>
-                <Text style={styles.requestNo}>{item.request_number}</Text>
-                <Text style={[styles.newBadge, status !== 'pending' && styles.statusBadgeMuted]}>{label}</Text>
-              </View>
-              <Text style={styles.requestFrom}>From: {item.requesting_dealer || '-'} / {item.requesting_branch || '-'}</Text>
-              <Text style={styles.requestFrom}>To: {item.supplying_dealer || '-'} / {item.supplying_branch || '-'}</Text>
-              {owner ? (
-                <Text style={styles.requestOwner}>
-                  {status === 'accepted' ? 'Accepted by' : status === 'rejected' ? 'Rejected by' : 'Picked by'} {owner}
+            <View style={styles.requestCard}>
+              <TouchableOpacity onPress={() => openRequest(item)}>
+                <View style={styles.rowBetween}>
+                  <Text style={styles.requestNo}>{item.request_number}</Text>
+                  <Text style={[styles.newBadge, status !== 'pending' && styles.statusBadgeMuted]}>{label}</Text>
+                </View>
+                <Text style={styles.requestFrom}>From: {item.requesting_dealer || '-'} / {item.requesting_branch || '-'}</Text>
+                <Text style={styles.requestFrom}>To: {item.supplying_dealer || '-'} / {item.supplying_branch || '-'}</Text>
+                {showOwner ? (
+                  <Text style={styles.requestOwner}>
+                    {status === 'accepted' || status === 'picking_completed' ? 'Accepted by' : status === 'rejected' ? 'Rejected by' : 'Picked by'} {owner}
+                  </Text>
+                ) : null}
+                {status === 'rejected' && item.rejection_reason ? (
+                  <Text style={styles.requestOwner}>Reason: {item.rejection_reason}</Text>
+                ) : null}
+                <Text style={styles.requestMeta}>
+                  Items: {item.total_items || 0}    Qty: {item.total_quantity || 0}    SLA: {formatSlaRemaining(item.response_deadline)}
                 </Text>
-              ) : null}
-              {status === 'rejected' && item.rejection_reason ? (
-                <Text style={styles.requestOwner}>Reason: {item.rejection_reason}</Text>
-              ) : null}
-              <Text style={styles.requestMeta}>
-                Items: {item.total_items || 0}    Qty: {item.total_quantity || 0}    SLA: {formatSlaRemaining(item.response_deadline)}
-              </Text>
+              </TouchableOpacity>
               {(showPick || showSnooze) && (
                 <View style={styles.requestActions}>
                   {showSnooze ? (
@@ -1946,7 +1954,7 @@ function NotificationsScreen({ onBack, rows, busy, refresh, openRequest, pickReq
                   ) : null}
                 </View>
               )}
-            </TouchableOpacity>
+            </View>
           );
         }}
       />
@@ -2083,14 +2091,14 @@ function RequestScreen({ onBack, request, rows, updateRow, onSubmit, onComplete,
           <PrimaryButton title="Submit Responses" onPress={onSubmit} busy={busy} />
           <View style={{ height: 10 }} />
           <PrimaryButton
-            title="Picking Completed"
+            title="Picking Finished"
             onPress={onComplete}
             busy={busy}
-            disabled={!allAnswered && !canCompleteRequest(request)}
+            disabled={!allAnswered}
           />
           <View style={styles.requestActions}>
-            <TouchableOpacity style={styles.snoozeButton} onPress={onTransfer} disabled={busy}>
-              <Text style={styles.snoozeText}>Transfer</Text>
+            <TouchableOpacity style={styles.snoozeButton} onPress={onTransfer} disabled={busy || !canTransferRequest(request)}>
+              <Text style={styles.snoozeText}>Transfer Picking</Text>
             </TouchableOpacity>
             <TouchableOpacity style={styles.snoozeButton} onPress={onRelease} disabled={busy}>
               <Text style={styles.snoozeText}>Release</Text>

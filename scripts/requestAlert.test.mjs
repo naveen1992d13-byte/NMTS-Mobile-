@@ -9,6 +9,10 @@ import {
   DEFAULT_NOTIFICATION_ACTION,
   PUSH_SOUND_ASSET,
   buildIncomingAlert,
+  canCompleteRequest,
+  canEditRequest,
+  canPickRequest,
+  canTransferRequest,
   findRequestGroup,
   flattenExpoNotificationData,
   formatSlaRemaining,
@@ -100,5 +104,31 @@ assert.equal(isBranchRequest({
 }), false);
 assert.equal(isBranchRequest({ type: 'branch_request', request_group_key: 'g1' }), true);
 assert.equal(isBranchRequest({ request_group_key: 'g1', request_number: 'RQ-1' }), false);
+
+const pending = { status: 'pending', accepted_by_me: false, can_edit: false };
+assert.equal(canPickRequest(pending), true);
+assert.equal(canEditRequest(pending), false);
+assert.equal(canCompleteRequest(pending), false);
+assert.equal(canTransferRequest(pending), false);
+
+const pickedByOther = { status: 'picked', accepted_by_me: false, can_edit: false };
+assert.equal(canPickRequest(pickedByOther), false);
+assert.equal(canEditRequest(pickedByOther), false);
+assert.equal(canTransferRequest(pickedByOther), false);
+
+const mine = { status: 'picked', accepted_by_me: true, can_edit: true, all_lines_answered: false };
+assert.equal(canPickRequest(mine), false);
+assert.equal(canEditRequest(mine), true);
+assert.equal(canCompleteRequest(mine), false);
+assert.equal(canTransferRequest(mine), true);
+
+const answered = { ...mine, all_lines_answered: true };
+assert.equal(canCompleteRequest(answered), true);
+assert.equal(canTransferRequest(answered), true);
+
+const transferredAway = { status: 'picked', accepted_by_me: false, can_edit: false, all_lines_answered: true };
+assert.equal(canEditRequest(transferredAway), false);
+assert.equal(canCompleteRequest(transferredAway), false);
+assert.equal(canTransferRequest(transferredAway), false);
 
 console.log('requestAlert routing tests: PASS');
