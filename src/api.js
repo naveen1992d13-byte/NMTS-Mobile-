@@ -8,12 +8,13 @@ let cachedAuth = { token: null, baseUrl: null, loadedAt: 0 };
 const AUTH_CACHE_TTL_MS = 15000;
 
 export class ApiError extends Error {
-  constructor(message, { status = 0, kind = 'server', data = null } = {}) {
+  constructor(message, { status = 0, kind = 'server', data = null, code = '' } = {}) {
     super(message);
     this.name = 'ApiError';
     this.status = status;
     this.kind = kind;
     this.data = data;
+    this.code = code;
   }
 }
 
@@ -45,17 +46,33 @@ async function resolveAuthContext(overrideUrl) {
   return { token, baseUrl };
 }
 
+function errorDetailObject(error) {
+  const detail = error?.response?.data?.detail ?? error?.data?.detail;
+  if (detail && typeof detail === 'object') return detail;
+  return null;
+}
+
 function errorDetailText(error) {
-  const detail = error?.response?.data?.detail;
+  const detail = error?.response?.data?.detail ?? error?.data?.detail;
   if (typeof detail === 'string') return detail;
-  if (detail && typeof detail === 'object') {
-    const message = detail.message || '';
-    const picked = detail.picked_by_name;
+  const obj = errorDetailObject(error);
+  if (obj) {
+    const code = obj.code || '';
+    const picked = obj.picked_by_name;
+    if (code === 'ALREADY_PICKED') return `Already picked by ${picked || 'another user'}`;
+    if (code === 'NOT_OWNER') return obj.message || 'Only the owner can do this.';
+    if (code === 'INVALID_STATE') return obj.message || 'This request can no longer be changed.';
+    if (code === 'TRANSFER_TARGET_INVALID') return obj.message || 'Select a valid same-branch user.';
+    const message = obj.message || '';
     if (message && picked && !message.includes(picked)) return `${message} (${picked})`;
     if (message) return message;
     if (picked) return `Already picked by ${picked}`;
   }
   return error?.message || '';
+}
+
+export function errorCode(error) {
+  return errorDetailObject(error)?.code || error?.data?.code || '';
 }
 
 export function isInvalidDeviceSession(error) {
@@ -79,7 +96,9 @@ function errorFromAxios(error) {
   let kind = 'server';
   if (isInvalidDeviceSession({ status, message, response: error?.response })) kind = 'auth';
   else if (!status) kind = error?.code === 'ECONNABORTED' ? 'timeout' : 'network';
-  return new ApiError(message, { status, kind, data: error?.response?.data || null });
+  const detail = error?.response?.data?.detail;
+  const code = detail && typeof detail === 'object' ? detail.code || '' : '';
+  return new ApiError(message, { status, kind, data: error?.response?.data || null, code });
 }
 
 async function request(method, path, { data, params, auth = true, baseUrl, timeout = REQUEST_TIMEOUT_MS } = {}) {
@@ -136,9 +155,6 @@ export const registerPushToken = (pushToken) => request('put', '/mobile/devices/
 export const getNotifications = () => request('get', '/mobile/notifications');
 export const acceptNotification = (requestGroupKey) => request('post', '/mobile/notifications/accept', { data: { request_group_key: requestGroupKey } });
 export const skipNotification = (requestGroupKey) => request('post', '/mobile/notifications/skip', { data: { request_group_key: requestGroupKey } });
-export const rejectNotification = (requestGroupKey, reason) => request('post', '/mobile/notifications/reject', {
-  data: { request_group_key: requestGroupKey, reason },
-});
 export const submitPartResponse = (requestGroupKey, parts) => request('post', '/mobile/notifications/respond', {
   data: {
     request_group_key: requestGroupKey,
@@ -237,5 +253,25 @@ export async function searchStock(query, options = {}) {
     params: { part_numbers: partNumbers, mode: 'exact' },
   });
 }
+
+export const completePicking = (requestGroupKey) => request('post', '/mobile/notifications/complete', {
+  data: { request_group_key: requestGroupKey },
+});
+export const getTransferTargets = (requestGroupKey) => request('get', '/mobile/notifications/transfer-targets', {
+  params: { request_group_key: requestGroupKey },
+});
+export const transferOwnership = (requestGroupKey, targetMobileUserId) => request('post', '/mobile/notifications/transfer', {
+  data: { request_group_key: requestGroupKey, target_mobile_user_id: targetMobileUserId },
+});
+export const releaseOwnership = (requestGroupKey, reason, note = '') => request('post', '/mobile/notifications/release', {
+  data: { request_group_key: requestGroupKey, reason, note },
+});
+
+export const RELEASE_REASONS = [
+  { value: 'WRONG_PICK', label: 'Wrong pick' },
+  { value: 'UNABLE_TO_COMPLETE', label: 'Unable to complete' },
+  { value: 'SHIFT_CHANGE', label: 'Shift change' },
+  { value: 'OTHER', label: 'Other' },
+];
 
 export const getLatestAppVersion = () => request('get', '/mobile/app-versions/latest', { auth: false });

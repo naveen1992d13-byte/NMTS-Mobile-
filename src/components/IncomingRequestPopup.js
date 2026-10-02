@@ -1,29 +1,33 @@
 import React from 'react';
 import { Modal, StyleSheet, Text, TouchableOpacity, View } from 'react-native';
 import { BORDER, CARD_SOLID, MUTED, NEON_CYAN, NEON_YELLOW, TEXT } from '../theme';
+import { canPickRequest, canSnoozeRequest, ownerName, requestStatus } from '../utils/requestAlert';
 
-export default function IncomingRequestPopup({ visible, alert, onPick, onSnooze }) {
+export default function IncomingRequestPopup({ visible, alert, onPick, onSnooze, onOpen }) {
   if (!alert) return null;
-  const status = String(alert.status || 'pending').toLowerCase();
-  const canPick = status === 'pending';
-  const skipAllowed = alert.skip_allowed !== false && canPick;
-  const owner = alert.picked_by_name || '';
+  const transferred = alert.type === 'request_transferred';
+  const showPick = !transferred && canPickRequest(alert.group || alert);
+  const skipAllowed = !transferred && canSnoozeRequest(alert.group || alert);
+  const owner = ownerName(alert) || alert.picked_by_name || '';
+  const status = requestStatus(alert);
   const statusText =
     status === 'picked' && owner
       ? `PICKED by ${owner}`
       : status === 'accepted' && owner
         ? `ACCEPTED by ${owner}`
-        : status === 'rejected' && owner
-          ? `REJECTED by ${owner}`
-          : status === 'expired'
-            ? 'EXPIRED – NO RESPONSE'
-            : alert.status_label || '';
+        : status === 'picking_completed'
+          ? 'PICKING COMPLETED'
+          : status === 'rejected' && owner
+            ? `REJECTED by ${owner}`
+            : status === 'expired'
+              ? 'EXPIRED – NO RESPONSE'
+              : alert.status_label || '';
 
   return (
     <Modal visible={visible} transparent animationType="fade" onRequestClose={onSnooze}>
       <View style={styles.backdrop}>
         <View style={styles.card}>
-          <Text style={styles.kicker}>INCOMING REQUEST</Text>
+          <Text style={styles.kicker}>{transferred ? 'REQUEST TRANSFERRED' : 'INCOMING REQUEST'}</Text>
 
           <View style={styles.row}>
             <Text style={styles.label}>Request Number</Text>
@@ -44,9 +48,13 @@ export default function IncomingRequestPopup({ visible, alert, onPick, onSnooze 
             </View>
           </View>
 
-          {!canPick && Boolean(statusText) && <Text style={styles.ownerNote}>{statusText}</Text>}
+          {!showPick && Boolean(statusText) && <Text style={styles.ownerNote}>{statusText}</Text>}
 
-          {canPick ? (
+          {transferred ? (
+            <TouchableOpacity style={styles.pick} onPress={onOpen || onPick}>
+              <Text style={styles.pickText}>OPEN REQUEST</Text>
+            </TouchableOpacity>
+          ) : showPick ? (
             <View style={styles.actions}>
               {skipAllowed ? (
                 <TouchableOpacity style={styles.snooze} onPress={onSnooze}>

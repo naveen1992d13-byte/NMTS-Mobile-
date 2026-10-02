@@ -37,13 +37,19 @@ import {
   getNotifications,
   acceptNotification,
   skipNotification,
-  rejectNotification,
   submitPartResponse,
+  completePicking,
+  getTransferTargets,
+  transferOwnership,
+  releaseOwnership,
+  RELEASE_REASONS,
+  errorCode,
   searchStock,
   getLatestAppVersion,
   getAutoPerpetualTasks,
   getAutoPerpetualSessionToday,
 } from './src/api';
+import { PAIRING_SERVER_PRESETS, normalizeApiBaseUrl } from './src/config/env';
 import {
   initOfflineQueue,
   enqueueAndTrySync,
@@ -64,6 +70,7 @@ import {
   addNativePickListener,
   addNativeSnoozeListener,
   addNativeIncomingAlertListener,
+  addNativeRequestPickedListener,
   stopRinging,
   isIgnoringBatteryOptimizations,
   requestIgnoreBatteryOptimizations,
@@ -83,7 +90,7 @@ import StockAvailabilityScreen from './src/components/StockAvailabilityScreen';
 import MultiPartSearchScreen from './src/components/MultiPartSearchScreen';
 import MandatoryUpdateScreen from './src/components/MandatoryUpdateScreen';
 import IncomingRequestPopup from './src/components/IncomingRequestPopup';
-import { buildIncomingAlert, canEditRequest, canPickRequest, canSnoozeRequest, findRequestGroup, formatSlaRemaining, isBranchRequest, ownerName, requestStatus, resolveNotificationData, statusLabelFor } from './src/utils/requestAlert';
+import { buildIncomingAlert, canCompleteRequest, canEditRequest, canPickRequest, canReleaseRequest, canSnoozeRequest, canTransferRequest, findRequestGroup, formatSlaRemaining, isBranchRequest, isRequestPickedPush, isRequestTransferredPush, ownerName, requestStatus, resolveNotificationData, statusLabelFor } from './src/utils/requestAlert';
 import {
   Empty,
   Field,
@@ -167,6 +174,8 @@ export default function App() {
   const [pairingCode, setPairingCode] = useState('');
   const [pairingBusy, setPairingBusy] = useState(false);
   const [pairingScanned, setPairingScanned] = useState(false);
+  const [manualServerUrl, setManualServerUrl] = useState(PAIRING_SERVER_PRESETS[0].url);
+  const [showManualPairing, setShowManualPairing] = useState(false);
 
   const [notifications, setNotifications] = useState([]);
   const [notificationsBusy, setNotificationsBusy] = useState(false);
@@ -346,19 +355,17 @@ export default function App() {
           const next = buildIncomingAlert(currentAlert.data || currentAlert, sessionRef.current, group);
           incomingAlertRef.current = next;
           setIncomingAlert(next);
-          if (requestStatus(group) !== 'pending') {
+          const keepTransferRing = currentAlert.type === 'request_transferred' && group.accepted_by_me && requestStatus(group) === 'picked';
+          if (!canPickRequest(group) && !keepTransferRing) {
             stopRinging(group.request_group_key || group.request_number);
             stopRequestRingtone();
           }
+        } else {
+          stopRinging(currentAlert.request_group_key || currentAlert.request_number);
+          stopRequestRingtone();
+          incomingAlertRef.current = null;
+          setIncomingAlert(null);
         }
-      }
-      const live = list.find((row) => {
-        if (requestStatus(row) !== 'pending') return false;
-        const key = row.request_group_key || row.request_number;
-        return key && !snoozedRequestKeysRef.current.has(key);
-      });
-      if (live && screenRef.current !== 'request' && !incomingAlertRef.current) {
-        startRequestRingtone(live.request_group_key || live.request_number);
       }
     } catch (error) {
       Alert.alert('Notifications', friendlyError(error));
@@ -386,7 +393,16 @@ export default function App() {
 
   const showIncomingFromPush = useCallback(async (data, notification) => {
     const payload = resolveNotificationData(data);
-    if (!isBranchRequest(payload)) return;
+    if (isRequestPickedPush(payload)) {
+      const key = payload.request_group_key || payload.requestId || payload.request_number;
+      stopRinging(key);
+      stopRequestRingtone();
+      incomingAlertRef.current = null;
+      setIncomingAlert(null);
+      loadNotificationsRef.current?.();
+      return;
+    }
+    if (!isBranchRequest(payload) && !isRequestTransferredPush(payload)) return;
     const key = String(payload.request_group_key || payload.requestId || payload.request_number || '');
     if (key && incomingShownKeyRef.current === key && incomingAlertRef.current) return;
     if (key) incomingShownKeyRef.current = key;
@@ -407,7 +423,7 @@ export default function App() {
     const pending = requestStatus(alert) === 'pending' || !alert.status;
     const skipAllowed = alert.skip_allowed !== false && pending;
     if (pending && !skipAllowed) {
-      Alert.alert('Snooze unavailable', 'This is the third alert — pick or reject this request.');
+      Alert.alert('Snooze unavailable', 'This is the third alert — pick this request.');
       return;
     }
     if (skipAllowed && alert.request_group_key) {
@@ -439,6 +455,12 @@ export default function App() {
       setNotifications(rows);
     } catch (_e) {}
     const group = findRequestGroup(rows, data);
+    if (group && (group.accepted_by_me || data?.type === 'request_transferred') && openRequestRef.current) {
+      incomingAlertRef.current = null;
+      setIncomingAlert(null);
+      openRequestRef.current(group);
+      return;
+    }
     if (group && pickRequestRef.current) {
       await pickRequestRef.current(group);
       return;
@@ -451,15 +473,25 @@ export default function App() {
     if (!session?.deviceId) return undefined;
     let teardown = () => {};
     const pickSub = addNativePickListener((data) => {
-      showIncomingFromPush(data);
+      pickIncomingFromPush(data);
     });
     const snoozeSub = addNativeSnoozeListener((data) => {
       snoozeIncomingAlert(data);
     });
     const incomingSub = addNativeIncomingAlertListener((data) => {
       const key = data.request_group_key || data.requestId || data.request_number;
-      if (key && snoozedRequestKeysRef.current.has(key)) return;
+      if (key && snoozedRequestKeysRef.current.has(key) && data.type !== 'request_transferred') return;
       showIncomingFromPush(data);
+    });
+    const pickedSub = addNativeRequestPickedListener((data) => {
+      const key = data.request_group_key || data.requestId || data.request_number;
+      const name = data.picked_by_name;
+      stopRinging(key);
+      stopRequestRingtone();
+      incomingAlertRef.current = null;
+      setIncomingAlert(null);
+      if (name) Alert.alert('Already Picked', `Already picked by ${name}`);
+      loadNotificationsRef.current?.();
     });
     const promptFullScreenIntent = (isReturn) => {
       if (isReturn) {
@@ -576,6 +608,7 @@ export default function App() {
       pickSub?.remove?.();
       snoozeSub?.remove?.();
       incomingSub?.remove?.();
+      pickedSub?.remove?.();
       fsiAppSub?.remove?.();
       teardown();
     };
@@ -589,15 +622,18 @@ export default function App() {
           const rows = await getNotifications();
           notificationsRef.current = rows || [];
           setNotifications(rows || []);
+          const currentAlert = incomingAlertRef.current;
+          if (currentAlert) {
+            const group = findRequestGroup(rows || [], currentAlert);
+            const keepTransfer = currentAlert.type === 'request_transferred' && group?.accepted_by_me && requestStatus(group) === 'picked';
+            if (!group || (!canPickRequest(group) && !keepTransfer)) {
+              stopRinging(currentAlert.request_group_key || currentAlert.request_number);
+              stopRequestRingtone();
+              incomingAlertRef.current = null;
+              setIncomingAlert(null);
+            }
+          }
         } catch (_e) {}
-        if (screenRef.current === 'request') return;
-        const live = (notificationsRef.current || []).find((row) => {
-          const key = row.request_group_key || row.request_number;
-          return key && !snoozedRequestKeysRef.current.has(key);
-        });
-        if (live && Platform.OS !== 'android') {
-          startRequestRingtone(live.request_group_key || live.request_number);
-        }
       })();
     };
     const sub = AppState.addEventListener('change', onAppState);
@@ -702,7 +738,7 @@ export default function App() {
             purchaseAging: part.purchase_aging_days ?? part.purchase_aging ?? '-',
             salesAging: part.sales_aging_days ?? part.sales_aging ?? '-',
             value: numberValue(part.part_value ?? part.value),
-            acceptedQty: String(part.accepted_qty ?? part.requested_qty ?? 0),
+            acceptedQty: part.response_saved || part.accepted_qty != null ? String(part.accepted_qty) : '',
             remark: part.remark || '',
           }))
         );
@@ -712,11 +748,15 @@ export default function App() {
 
   const pairDevice = async ({ qrMobileUserId, pairingType, qrPairingCode, apiBaseUrl, pairingToken }) => {
     if (!userName.trim() || !mobileNumber.trim()) {
-      Alert.alert('Required', 'Enter your name and mobile number before scanning the QR code.');
+      Alert.alert('Required', 'Enter your name and mobile number before pairing.');
       return;
     }
-    if (!qrPairingCode?.trim() || !apiBaseUrl || !pairingToken || (pairingType === 'REPAIR' && !qrMobileUserId?.trim())) {
-      Alert.alert('Scan QR Code', 'Scan the pairing QR code generated from the NMTS website.');
+    if (!qrPairingCode?.trim() || !apiBaseUrl) {
+      Alert.alert('Pairing required', 'Enter the website pairing code and HTTPS server URL, or scan the QR.');
+      return;
+    }
+    if (pairingType === 'REPAIR' && pairingToken && !qrMobileUserId?.trim()) {
+      Alert.alert('Scan QR Code', 'Re-pair QR is missing the Mobile User ID.');
       return;
     }
     setPairingBusy(true);
@@ -735,7 +775,7 @@ export default function App() {
         mobileUserId: qrMobileUserId?.trim()?.toUpperCase() || null,
         pairingType,
         pairingCode: qrPairingCode.trim().toUpperCase(),
-        pairingToken,
+        pairingToken: pairingToken || null,
         apiBaseUrl,
         deviceUserName: userName.trim(),
         deviceUserMobile: mobileNumber.trim(),
@@ -1148,11 +1188,16 @@ export default function App() {
   };
 
   const pickRequest = async (group) => {
-    if (!canPickRequest(group) && !group?.accepted_by_me) {
+    if (group?.accepted_by_me) {
+      openRequest(group);
+      return;
+    }
+    if (!canPickRequest(group)) {
+      const name = ownerName(group);
       Alert.alert(
         requestStatus(group) === 'picked' ? 'Already Picked' : 'Unavailable',
         requestStatus(group) === 'picked'
-          ? `Picked by ${ownerName(group) || 'another device'}`
+          ? `Already picked by ${name || 'another user'}`
           : statusLabelFor(requestStatus(group))
       );
       loadNotifications();
@@ -1160,10 +1205,10 @@ export default function App() {
     }
     setRequestBusy(true);
     try {
+      await acceptNotification(group.request_group_key);
       incomingShownKeyRef.current = null;
       incomingAlertRef.current = null;
       stopRinging(group.request_group_key || group.request_number);
-      await acceptNotification(group.request_group_key);
       await dismissRequestNotification(incomingNotificationRef.current);
       await dismissBranchRequestNotifications();
       incomingNotificationRef.current = null;
@@ -1178,10 +1223,15 @@ export default function App() {
       openRequest(next);
     } catch (error) {
       const name = error?.data?.detail?.picked_by_name;
-      Alert.alert(
-        error?.status === 409 ? 'Already Picked' : 'Unable to Pick',
-        name ? `Picked by ${name}` : friendlyError(error)
-      );
+      const code = errorCode(error) || error?.code;
+      if (code === 'ALREADY_PICKED' || error?.status === 409) {
+        stopRinging(group.request_group_key || group.request_number);
+        incomingAlertRef.current = null;
+        setIncomingAlert(null);
+        Alert.alert('Already Picked', `Already picked by ${name || 'another user'}`);
+      } else {
+        Alert.alert('Unable to Pick', friendlyError(error));
+      }
       loadNotifications();
     } finally {
       setRequestBusy(false);
@@ -1190,7 +1240,7 @@ export default function App() {
 
   const snoozeRequest = async (group) => {
     if (!canSnoozeRequest(group)) {
-      Alert.alert('Snooze unavailable', 'This is the third alert — pick or reject this request.');
+      Alert.alert('Snooze unavailable', 'This is the third alert — pick this request.');
       return;
     }
     try {
@@ -1214,7 +1264,6 @@ export default function App() {
     stopRinging(group?.request_group_key || group?.request_number);
     stopRequestRingtone();
     setSelectedRequest(group);
-    const editable = canEditRequest(group);
     setRequestRows(
       (group.parts || []).map((part) => ({
         orderRequestId: part.order_request_id,
@@ -1226,7 +1275,7 @@ export default function App() {
         purchaseAging: part.purchase_aging_days ?? part.purchase_aging ?? '-',
         salesAging: part.sales_aging_days ?? part.sales_aging ?? '-',
         value: numberValue(part.part_value ?? part.value),
-        acceptedQty: String(editable ? (part.requested_qty ?? 0) : (part.accepted_qty ?? part.requested_qty ?? 0)),
+        acceptedQty: part.response_saved || part.accepted_qty != null ? String(part.accepted_qty) : '',
         remark: part.remark || '',
       }))
     );
@@ -1247,13 +1296,17 @@ export default function App() {
       return;
     }
     for (const row of requestRows) {
+      if (String(row.acceptedQty ?? '').trim() === '') {
+        Alert.alert('Response required', `Enter an accepted quantity for ${row.partNumber}.`);
+        return;
+      }
       const qty = numberValue(row.acceptedQty);
       if (qty < 0 || qty > row.requestedQty) {
         Alert.alert('Invalid Quantity', `Check accepted quantity for ${row.partNumber}.`);
         return;
       }
       if (qty < row.requestedQty && !row.remark.trim()) {
-        Alert.alert('Remark Required', `Enter a remark for ${row.partNumber}.`);
+        Alert.alert('Remark Required', `Enter a remark for ${row.partNumber}. Zero accepted qty covers a rejection.`);
         return;
       }
     }
@@ -1268,9 +1321,11 @@ export default function App() {
           remark: row.remark.trim(),
         }))
       );
-      Alert.alert('Submitted', 'Request response submitted successfully.');
-      loadNotifications();
-      setScreen('notifications');
+      Alert.alert('Responses saved', 'Accepted quantities saved. Complete picking when every line is answered.');
+      const rows = await getNotifications().catch(() => notificationsRef.current || []);
+      setNotifications(rows || []);
+      const next = findRequestGroup(rows, selectedRequest);
+      if (next) setSelectedRequest(next);
     } catch (error) {
       Alert.alert('Submit Failed', friendlyError(error));
       loadNotifications();
@@ -1279,30 +1334,115 @@ export default function App() {
     }
   };
 
-  const rejectRequest = async (reason) => {
+  const completeRequestPicking = async () => {
     if (!canEditRequest(selectedRequest)) {
-      Alert.alert(
-        'Already Picked',
-        `This request is locked${ownerName(selectedRequest) ? ` by ${ownerName(selectedRequest)}` : ''}.`
-      );
-      return;
-    }
-    const text = String(reason || '').trim();
-    if (!text) {
-      Alert.alert('Reason required', 'Enter a rejection reason.');
+      Alert.alert('Unavailable', 'Only the owner can complete picking.');
       return;
     }
     setRequestBusy(true);
     try {
-      await rejectNotification(selectedRequest.request_group_key, text);
-      Alert.alert('Rejected', 'Request rejected.');
+      await completePicking(selectedRequest.request_group_key);
+      Alert.alert('Picking completed', 'This request is now waiting for web dispatch.');
       loadNotifications();
       setScreen('notifications');
     } catch (error) {
-      Alert.alert('Reject Failed', friendlyError(error));
+      Alert.alert('Unable to complete', friendlyError(error));
       loadNotifications();
     } finally {
       setRequestBusy(false);
+    }
+  };
+
+  const transferRequestOwnership = async () => {
+    if (!canTransferRequest(selectedRequest)) {
+      Alert.alert('Unavailable', 'Only the owner can transfer this request.');
+      return;
+    }
+    setRequestBusy(true);
+    try {
+      const targets = await getTransferTargets(selectedRequest.request_group_key);
+      if (!targets?.length) {
+        Alert.alert('No users', 'No other active paired user on this branch.');
+        return;
+      }
+      Alert.alert(
+        'Transfer ownership',
+        'Choose a same-branch user. They become the owner immediately.',
+        [
+          { text: 'Cancel', style: 'cancel' },
+          ...targets.slice(0, 5).map((target) => ({
+            text: target.name || target.mobile_user_id,
+            onPress: async () => {
+              try {
+                await transferOwnership(selectedRequest.request_group_key, target.mobile_user_id);
+                Alert.alert('Transferred', `Now owned by ${target.name || target.mobile_user_id}.`);
+                loadNotifications();
+                setScreen('notifications');
+              } catch (error) {
+                Alert.alert('Transfer failed', friendlyError(error));
+              }
+            },
+          })),
+        ]
+      );
+    } catch (error) {
+      Alert.alert('Transfer failed', friendlyError(error));
+    } finally {
+      setRequestBusy(false);
+    }
+  };
+
+  const releaseRequestOwnership = async () => {
+    if (!canReleaseRequest(selectedRequest)) {
+      Alert.alert('Unavailable', 'Only the owner can release this request.');
+      return;
+    }
+    Alert.alert('Release ownership', 'Choose a reason. The request returns to the branch pool.', [
+      { text: 'Cancel', style: 'cancel' },
+      ...RELEASE_REASONS.map((reason) => ({
+        text: reason.label,
+        onPress: () => {
+          if (reason.value === 'OTHER') {
+            Alert.prompt
+              ? Alert.prompt('Release note', 'Optional note', async (note) => {
+                try {
+                  await releaseOwnership(selectedRequest.request_group_key, reason.value, note || '');
+                  Alert.alert('Released', 'The request is back in the branch pool.');
+                  loadNotifications();
+                  setScreen('notifications');
+                } catch (error) {
+                  Alert.alert('Release failed', friendlyError(error));
+                }
+              })
+              : releaseOwnership(selectedRequest.request_group_key, reason.value, '').then(() => {
+                Alert.alert('Released', 'The request is back in the branch pool.');
+                loadNotifications();
+                setScreen('notifications');
+              }).catch((error) => Alert.alert('Release failed', friendlyError(error)));
+            return;
+          }
+          releaseOwnership(selectedRequest.request_group_key, reason.value, '').then(() => {
+            Alert.alert('Released', 'The request is back in the branch pool.');
+            loadNotifications();
+            setScreen('notifications');
+          }).catch((error) => Alert.alert('Release failed', friendlyError(error)));
+        },
+      })),
+    ]);
+  };
+
+  const pairManually = async () => {
+    try {
+      const apiBaseUrl = normalizeApiBaseUrl(manualServerUrl);
+      await pairDevice({
+        qrMobileUserId: mobileUserId.trim().toUpperCase() || null,
+        pairingType: mobileUserId.trim() ? 'REPAIR' : 'NEW',
+        qrPairingCode: pairingCode.trim().toUpperCase(),
+        apiBaseUrl,
+        pairingToken: null,
+      });
+    } catch (error) {
+      Alert.alert('Pairing Failed', friendlyError(error));
     }
   };
 
@@ -1348,12 +1488,20 @@ export default function App() {
       {screen === 'pair' && (
         <PairScreen
           mobileUserId={mobileUserId}
+          setMobileUserId={setMobileUserId}
           userName={userName}
           setUserName={setUserName}
           mobileNumber={mobileNumber}
           setMobileNumber={setMobileNumber}
+          pairingCode={pairingCode}
+          setPairingCode={setPairingCode}
+          manualServerUrl={manualServerUrl}
+          setManualServerUrl={setManualServerUrl}
+          showManual={showManualPairing}
+          setShowManual={setShowManualPairing}
           busy={pairingBusy}
           onScanQr={() => openScanner('pairing')}
+          onManualPair={pairManually}
         />
       )}
       {screen === 'home' && (
@@ -1455,7 +1603,9 @@ export default function App() {
             setRequestRows((items) => items.map((x) => (x.orderRequestId === id ? { ...x, [field]: value } : x)))
           }
           onSubmit={submitRequestResponse}
-          onReject={rejectRequest}
+          onComplete={completeRequestPicking}
+          onTransfer={transferRequestOwnership}
+          onRelease={releaseRequestOwnership}
           busy={requestBusy}
           canEdit={canEditRequest(selectedRequest)}
         />
@@ -1484,6 +1634,7 @@ export default function App() {
         visible={Boolean(incomingAlert)}
         alert={incomingAlert}
         onPick={() => pickIncomingFromPush(incomingAlert?.data || incomingAlert)}
+        onOpen={() => pickIncomingFromPush(incomingAlert?.data || incomingAlert)}
         onSnooze={snoozeIncomingAlert}
       />
     </SafeAreaView>
@@ -1514,7 +1665,43 @@ function PairScreen(props) {
             first pairing; Re-pair keeps the same ID.
           </Text>
           <PrimaryButton title="Scan NMTS Pairing QR" onPress={props.onScanQr} busy={props.busy} />
-          {!!props.mobileUserId && <Text style={styles.detectedUser}>Detected User: {props.mobileUserId}</Text>}
+          <TouchableOpacity style={{ marginTop: 14 }} onPress={() => props.setShowManual(!props.showManual)}>
+            <Text style={styles.pendingAction}>Enter Code Manually</Text>
+          </TouchableOpacity>
+          {props.showManual ? (
+            <View style={{ marginTop: 14 }}>
+              <Field
+                label="Website pairing code"
+                value={props.pairingCode}
+                onChangeText={(value) => props.setPairingCode(String(value || '').toUpperCase())}
+                autoCapitalize="characters"
+              />
+              <Field
+                label="Re-pair Mobile User ID (optional)"
+                value={props.mobileUserId}
+                onChangeText={(value) => props.setMobileUserId(String(value || '').toUpperCase())}
+                autoCapitalize="characters"
+              />
+              <Text style={styles.qrInfo}>HTTPS server URL</Text>
+              {PAIRING_SERVER_PRESETS.map((preset) => (
+                <TouchableOpacity
+                  key={preset.url}
+                  style={[styles.snoozeButton, props.manualServerUrl === preset.url && { borderColor: BLUE }]}
+                  onPress={() => props.setManualServerUrl(preset.url)}
+                >
+                  <Text style={styles.snoozeText}>{preset.label}</Text>
+                </TouchableOpacity>
+              ))}
+              <Field
+                label="Custom HTTPS URL"
+                value={props.manualServerUrl}
+                onChangeText={props.setManualServerUrl}
+                autoCapitalize="none"
+              />
+              <PrimaryButton title="Pair with Code" onPress={props.onManualPair} busy={props.busy} />
+            </View>
+          ) : null}
+          {!!props.mobileUserId && !props.showManual && <Text style={styles.detectedUser}>Detected User: {props.mobileUserId}</Text>}
         </View>
       </ScrollView>
     </KeyboardAvoidingView>
@@ -1767,13 +1954,13 @@ function NotificationsScreen({ onBack, rows, busy, refresh, openRequest, pickReq
   );
 }
 
-function RequestScreen({ onBack, request, rows, updateRow, onSubmit, onReject, busy, canEdit }) {
+function RequestScreen({ onBack, request, rows, updateRow, onSubmit, onComplete, onTransfer, onRelease, busy, canEdit }) {
   const scrollRef = useRef(null);
   const qtyRefs = useRef({});
-  const [rejectReason, setRejectReason] = useState('');
   const status = requestStatus(request);
   const owner = ownerName(request);
   const locked = !canEdit;
+  const allAnswered = rows.length > 0 && rows.every((row) => String(row.acceptedQty ?? '').trim() !== '');
 
   const keepQtyVisible = (orderRequestId) => {
     const node = qtyRefs.current[orderRequestId];
@@ -1794,15 +1981,17 @@ function RequestScreen({ onBack, request, rows, updateRow, onSubmit, onReject, b
   const lockMessage =
     status === 'expired'
       ? 'EXPIRED – NO RESPONSE'
-      : status === 'picked' && owner
-        ? `Picked by ${owner}`
-        : status === 'accepted' && owner
-          ? `Accepted by ${owner}`
-          : status === 'rejected' && owner
-            ? `Rejected by ${owner}${request?.rejection_reason ? ` — ${request.rejection_reason}` : ''}`
-            : locked
-              ? 'Pick this request to edit and submit.'
-              : '';
+      : status === 'picking_completed'
+        ? `PICKING COMPLETED${owner ? ` · ${owner}` : ''}`
+        : status === 'picked' && owner && locked
+          ? `Picked by ${owner}`
+          : status === 'accepted' && owner
+            ? `Accepted by ${owner}`
+            : status === 'rejected' && owner
+              ? `Rejected by ${owner}${request?.rejection_reason ? ` — ${request.rejection_reason}` : ''}`
+              : locked
+                ? 'Pick this request to edit and submit.'
+                : '';
 
   return (
     <KeyboardAvoidingView
@@ -1825,8 +2014,15 @@ function RequestScreen({ onBack, request, rows, updateRow, onSubmit, onReject, b
         automaticallyAdjustKeyboardInsets
       >
         {rows.map((row) => {
+          const confirmed = String(row.acceptedQty ?? '').trim() !== '';
           const accepted = numberValue(row.acceptedQty);
-          const partStatus = accepted === row.requestedQty ? 'ACCEPTED' : accepted === 0 ? 'REJECTED' : 'PARTIAL';
+          const partStatus = !confirmed
+            ? 'UNCONFIRMED'
+            : accepted === row.requestedQty
+              ? 'ACCEPTED'
+              : accepted === 0
+                ? 'ZERO'
+                : 'PARTIAL';
           return (
             <View key={row.orderRequestId} style={styles.requestPartCard}>
               <Text style={styles.partNumberText}>{row.partNumber}</Text>
@@ -1844,7 +2040,7 @@ function RequestScreen({ onBack, request, rows, updateRow, onSubmit, onReject, b
                 <View style={styles.qtyField}>
                   <Text style={styles.qtyLabel}>Accepted Qty</Text>
                   {locked ? (
-                    <Text style={styles.qtyReadOnly}>{row.acceptedQty}</Text>
+                    <Text style={styles.qtyReadOnly}>{confirmed ? row.acceptedQty : '—'}</Text>
                   ) : (
                     <TextInput
                       ref={(el) => {
@@ -1854,6 +2050,8 @@ function RequestScreen({ onBack, request, rows, updateRow, onSubmit, onReject, b
                       value={row.acceptedQty}
                       onChangeText={(v) => updateRow(row.orderRequestId, 'acceptedQty', v.replace(/[^0-9.]/g, ''))}
                       keyboardType="decimal-pad"
+                      placeholder="—"
+                      placeholderTextColor={MUTED}
                       onFocus={() => keepQtyVisible(row.orderRequestId)}
                     />
                   )}
@@ -1862,7 +2060,7 @@ function RequestScreen({ onBack, request, rows, updateRow, onSubmit, onReject, b
               <View style={styles.requestCardStatus}>
                 <StatusPill value={partStatus} />
               </View>
-              {partStatus !== 'ACCEPTED' && (
+              {confirmed && partStatus !== 'ACCEPTED' && (
                 locked ? (
                   row.remark ? <Text style={styles.remarkReadOnly}>{row.remark}</Text> : null
                 ) : (
@@ -1870,7 +2068,7 @@ function RequestScreen({ onBack, request, rows, updateRow, onSubmit, onReject, b
                     style={styles.remarkInput}
                     value={row.remark}
                     onChangeText={(v) => updateRow(row.orderRequestId, 'remark', v)}
-                    placeholder="Remark required"
+                    placeholder="Remark required if qty is below requested"
                     placeholderTextColor={MUTED}
                     onFocus={() => keepQtyVisible(row.orderRequestId)}
                   />
@@ -1882,24 +2080,21 @@ function RequestScreen({ onBack, request, rows, updateRow, onSubmit, onReject, b
       </ScrollView>
       {canEdit ? (
         <View style={styles.submitBar}>
-          <TextInput
-            style={styles.remarkInput}
-            value={rejectReason}
-            onChangeText={setRejectReason}
-            placeholder="Rejection reason (required to reject)"
-            placeholderTextColor={MUTED}
+          <PrimaryButton title="Submit Responses" onPress={onSubmit} busy={busy} />
+          <View style={{ height: 10 }} />
+          <PrimaryButton
+            title="Picking Completed"
+            onPress={onComplete}
+            busy={busy}
+            disabled={!allAnswered && !canCompleteRequest(request)}
           />
           <View style={styles.requestActions}>
-            <TouchableOpacity
-              style={styles.snoozeButton}
-              onPress={() => onReject(rejectReason)}
-              disabled={busy}
-            >
-              <Text style={styles.snoozeText}>Reject</Text>
+            <TouchableOpacity style={styles.snoozeButton} onPress={onTransfer} disabled={busy}>
+              <Text style={styles.snoozeText}>Transfer</Text>
             </TouchableOpacity>
-            <View style={{ flex: 1.5 }}>
-              <PrimaryButton title="Submit Request Response" onPress={onSubmit} busy={busy} />
-            </View>
+            <TouchableOpacity style={styles.snoozeButton} onPress={onRelease} disabled={busy}>
+              <Text style={styles.snoozeText}>Release</Text>
+            </TouchableOpacity>
           </View>
         </View>
       ) : null}

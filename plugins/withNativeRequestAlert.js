@@ -4,6 +4,8 @@ const path = require('path');
 
 const SOUND_SRC = 'assets/sounds/sleeping_stock_alert_2_rising_dispatch.wav';
 const SOUND_RAW_NAME = 'sleeping_stock_alert_2_rising_dispatch.wav';
+const LOGO_SRC = 'assets/sleeping-stock-logo.png';
+const LOGO_DRAWABLE_NAME = 'sleeping_stock_logo.png';
 const PERMISSIONS = [
   'android.permission.POST_NOTIFICATIONS',
   'android.permission.FOREGROUND_SERVICE',
@@ -76,6 +78,24 @@ function withNativeRequestAlert(config) {
         fs.copyFileSync(src, path.join(appRawDir, SOUND_RAW_NAME));
         fs.mkdirSync(moduleRawDir, { recursive: true });
         fs.copyFileSync(src, path.join(moduleRawDir, SOUND_RAW_NAME));
+      }
+      const logoSrc = path.join(projectRoot, LOGO_SRC);
+      const appDrawableDir = path.join(projectRoot, 'android', 'app', 'src', 'main', 'res', 'drawable');
+      const moduleDrawableDir = path.join(
+        projectRoot,
+        'modules',
+        'native-request-alert',
+        'android',
+        'src',
+        'main',
+        'res',
+        'drawable'
+      );
+      if (fs.existsSync(logoSrc)) {
+        fs.mkdirSync(appDrawableDir, { recursive: true });
+        fs.copyFileSync(logoSrc, path.join(appDrawableDir, LOGO_DRAWABLE_NAME));
+        fs.mkdirSync(moduleDrawableDir, { recursive: true });
+        fs.copyFileSync(logoSrc, path.join(moduleDrawableDir, LOGO_DRAWABLE_NAME));
       }
       return modConfig;
     },

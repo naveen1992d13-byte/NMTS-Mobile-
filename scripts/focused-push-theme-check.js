@@ -74,7 +74,6 @@ if (
   read('src/components/IncomingRequestPopup.js').includes('Total Quantity') &&
   read('src/components/IncomingRequestPopup.js').includes('PICK') &&
   read('src/components/IncomingRequestPopup.js').includes('SNOOZE') &&
-  !read('src/components/IncomingRequestPopup.js').includes('OPEN REQUEST') &&
   !read('src/components/IncomingRequestPopup.js').includes('SLA remaining')
 ) pass('popup shows only required fields and Pick/Snooze');
 else fail('popup fields/actions do not match requirement');
@@ -155,7 +154,7 @@ if (read('src/services/nativeRequestAlert.js').includes('stopRinging') && app.in
 if (app.includes('stopRinging(group.request_group_key') && app.includes('stopRinging(alert.request_group_key')) {
   pass('existing Pick/Snooze handlers call stopRinging');
 } else fail('Pick/Snooze handlers missing stopRinging');
-if (expo.version === '1.4.0' && expo.android.versionCode === 22) pass('APK versionCode is 22');
+if (expo.version === '1.4.1' && expo.android.versionCode === 23) pass('APK versionCode is 23');
 else fail('android versionCode/version not bumped');
 
 if (

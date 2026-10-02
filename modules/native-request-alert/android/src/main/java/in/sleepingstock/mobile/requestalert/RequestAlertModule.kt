@@ -15,10 +15,28 @@ import java.lang.ref.WeakReference
 class RequestAlertModule : Module() {
   override fun definition() = ModuleDefinition {
     Name("NativeRequestAlert")
-    Events("onPick", "onSnooze", "onIncomingAlert")
+    Events("onPick", "onSnooze", "onIncomingAlert", "onRequestPicked")
 
     OnCreate {
       instance = WeakReference(this@RequestAlertModule)
+      val context = appContext.reactContext ?: appContext.currentActivity
+      if (context != null) {
+        val persisted = RequestAlertStore.loadActiveAlert(context)
+        if (persisted != null && (persisted.requestId.isNotBlank() || persisted.requestNumber.isNotBlank())) {
+          RequestAlertLog.i("restoring persisted alert")
+          RequestAlertRingingService.startNow(context, persisted)
+        }
+      }
+    }
+
+    Function("saveAuth") { token: String, baseUrl: String ->
+      val context = appContext.reactContext ?: appContext.currentActivity ?: return@Function Unit
+      RequestAlertStore.saveAuth(context, token, baseUrl)
+    }
+
+    Function("clearAuth") {
+      val context = appContext.reactContext ?: appContext.currentActivity ?: return@Function Unit
+      RequestAlertStore.clearAuth(context)
     }
 
     OnDestroy {
@@ -125,6 +143,8 @@ class RequestAlertModule : Module() {
     fun emitSnooze(payload: RequestAlertPayload) = emitOrQueue("onSnooze", payload)
 
     fun emitIncoming(payload: RequestAlertPayload) = emitOrQueue("onIncomingAlert", payload)
+
+    fun emitPicked(payload: RequestAlertPayload) = emitOrQueue("onRequestPicked", payload)
 
     private fun emitOrQueue(event: String, payload: RequestAlertPayload) {
       val module = instance?.get()

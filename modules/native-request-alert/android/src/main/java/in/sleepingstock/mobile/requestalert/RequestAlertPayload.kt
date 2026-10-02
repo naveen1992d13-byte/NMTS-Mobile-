@@ -13,6 +13,9 @@ data class RequestAlertPayload(
   val totalItems: String,
   val totalQuantity: String,
   val round: String,
+  val type: String = TYPE_BRANCH_REQUEST,
+  val pickedByName: String = "",
+  val actionsEnabled: Boolean = true,
 ) {
   fun toBundle(): Bundle {
     val bundle = Bundle()
@@ -22,6 +25,9 @@ data class RequestAlertPayload(
     bundle.putString(KEY_TOTAL_ITEMS, totalItems)
     bundle.putString(KEY_TOTAL_QUANTITY, totalQuantity)
     bundle.putString(KEY_ROUND, round)
+    bundle.putString(KEY_TYPE, type)
+    bundle.putString(KEY_PICKED_BY_NAME, pickedByName)
+    bundle.putString(KEY_ACTIONS, if (actionsEnabled) "all" else "none")
     return bundle
   }
 
@@ -32,22 +38,42 @@ data class RequestAlertPayload(
     KEY_TOTAL_ITEMS to totalItems,
     KEY_TOTAL_QUANTITY to totalQuantity,
     KEY_ROUND to round,
+    KEY_TYPE to type,
+    KEY_PICKED_BY_NAME to pickedByName,
+    KEY_ACTIONS to if (actionsEnabled) "all" else "none",
     "request_group_key" to requestId,
     "request_number" to requestNumber,
     "requesting_branch" to branchName,
     "requested_branch" to branchName,
     "total_items" to totalItems,
     "total_qty" to totalQuantity,
-    "type" to "branch_request",
+    "type" to type,
+    "picked_by_name" to pickedByName,
   )
 
+  fun canShowSnooze(): Boolean {
+    if (!actionsEnabled || type != TYPE_BRANCH_REQUEST) return false
+    val roundValue = round.toIntOrNull() ?: 0
+    return roundValue < 2
+  }
+
+  fun canShowPick(): Boolean = actionsEnabled && type == TYPE_BRANCH_REQUEST
+
+  fun isTransfer(): Boolean = type == TYPE_REQUEST_TRANSFERRED
+
   companion object {
+    const val TYPE_BRANCH_REQUEST = "branch_request"
+    const val TYPE_REQUEST_PICKED = "request_picked"
+    const val TYPE_REQUEST_TRANSFERRED = "request_transferred"
     const val KEY_REQUEST_ID = "requestId"
     const val KEY_REQUEST_NUMBER = "requestNumber"
     const val KEY_BRANCH_NAME = "branchName"
     const val KEY_TOTAL_ITEMS = "totalItems"
     const val KEY_TOTAL_QUANTITY = "totalQuantity"
     const val KEY_ROUND = "round"
+    const val KEY_TYPE = "type"
+    const val KEY_PICKED_BY_NAME = "pickedByName"
+    const val KEY_ACTIONS = "actions"
 
     fun isRequestAlert(data: Map<String, String>?): Boolean {
       if (data.isNullOrEmpty()) return false
@@ -88,31 +114,48 @@ data class RequestAlertPayload(
       return flat
     }
 
-    fun fromRemoteMessage(message: RemoteMessage): RequestAlertPayload? {
-      val data = flattenRemoteMessageData(message)
-      val typeLabel = when (data["type"]?.trim()) {
-        "branch_request" -> "branch_request"
+    fun classifyType(data: Map<String, String>): String {
+      return when (data["type"]?.trim()) {
+        TYPE_BRANCH_REQUEST -> TYPE_BRANCH_REQUEST
+        TYPE_REQUEST_PICKED -> TYPE_REQUEST_PICKED
+        TYPE_REQUEST_TRANSFERRED -> TYPE_REQUEST_TRANSFERRED
         "auto_perpetual" -> "auto_perpetual"
         null, "" -> "empty"
         else -> "other"
       }
-      val classified = isRequestAlert(data)
+    }
+
+    fun classifyAndParse(message: RemoteMessage): Pair<String, RequestAlertPayload?> {
+      val data = flattenRemoteMessageData(message)
+      val typeLabel = classifyType(data)
+      val classified = typeLabel == TYPE_BRANCH_REQUEST
       RequestAlertLog.i("classification type=$typeLabel result=$classified")
-      if (!classified) return null
+      if (typeLabel != TYPE_BRANCH_REQUEST && typeLabel != TYPE_REQUEST_PICKED && typeLabel != TYPE_REQUEST_TRANSFERRED) {
+        return typeLabel to null
+      }
       val payload = fromMap(data)
-      RequestAlertLog.i(
-        "parsed requestId_present=${payload.requestId.isNotBlank()} " +
-          "request_number_present=${payload.requestNumber.isNotBlank()} " +
-          "branch_present=${payload.branchName.isNotBlank()} " +
-          "items_present=${payload.totalItems.isNotBlank()} " +
-          "qty_present=${payload.totalQuantity.isNotBlank()}"
-      )
-      return payload
+      if (typeLabel == TYPE_BRANCH_REQUEST) {
+        RequestAlertLog.i(
+          "parsed requestId_present=${payload.requestId.isNotBlank()} " +
+            "request_number_present=${payload.requestNumber.isNotBlank()} " +
+            "branch_present=${payload.branchName.isNotBlank()} " +
+            "items_present=${payload.totalItems.isNotBlank()} " +
+            "qty_present=${payload.totalQuantity.isNotBlank()}"
+        )
+      }
+      return typeLabel to payload
+    }
+
+    fun fromRemoteMessage(message: RemoteMessage): RequestAlertPayload? {
+      val (typeLabel, payload) = classifyAndParse(message)
+      return if (typeLabel == TYPE_BRANCH_REQUEST) payload else null
     }
 
     fun fromMap(data: Map<String, String>): RequestAlertPayload {
       val requestId = first(data, KEY_REQUEST_ID, "request_group_key", "request_id")
       val requestNumber = first(data, KEY_REQUEST_NUMBER, "request_number")
+      val type = first(data, KEY_TYPE, "type").ifEmpty { TYPE_BRANCH_REQUEST }
+      val actions = first(data, KEY_ACTIONS, "actions")
       return RequestAlertPayload(
         requestId = requestId.ifEmpty { requestNumber },
         requestNumber = requestNumber,
@@ -120,6 +163,9 @@ data class RequestAlertPayload(
         totalItems = first(data, KEY_TOTAL_ITEMS, "total_items"),
         totalQuantity = first(data, KEY_TOTAL_QUANTITY, "total_quantity", "total_qty"),
         round = first(data, KEY_ROUND, "kind").let { kindToRound(it) },
+        type = type,
+        pickedByName = first(data, KEY_PICKED_BY_NAME, "picked_by_name"),
+        actionsEnabled = type != TYPE_REQUEST_TRANSFERRED && actions != "none",
       )
     }
 

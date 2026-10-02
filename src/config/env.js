@@ -25,3 +25,8 @@ export const API_BASE_URL =
   fallbackApiBaseUrl;
 
 export const REQUEST_TIMEOUT_MS = 20000;
+
+export const PAIRING_SERVER_PRESETS = [
+  { label: 'Production', url: 'https://api.sleepingstock.in/api' },
+  { label: 'Testing', url: 'https://testing.sleepingstock.in/api' },
+];

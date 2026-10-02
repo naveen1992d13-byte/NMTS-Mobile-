@@ -71,6 +71,14 @@ export function isBranchRequest(data) {
   return flat.type === 'branch_request';
 }
 
+export function isRequestPickedPush(data) {
+  return flattenExpoNotificationData(data).type === 'request_picked';
+}
+
+export function isRequestTransferredPush(data) {
+  return flattenExpoNotificationData(data).type === 'request_transferred';
+}
+
 export function formatSlaRemaining(deadlineOrSeconds, nowMs = Date.now()) {
   if (deadlineOrSeconds == null || deadlineOrSeconds === '') return '—';
   let seconds;
@@ -130,7 +138,12 @@ export function buildIncomingAlert(data, session, group) {
     status,
     status_label: row.status_label || statusLabelFor(status),
     picked_by_name: row.picked_by_name || row.accepted_by_device_user_name || '',
-    skip_allowed: row.skip_allowed !== false && status === 'pending',
+    skip_allowed: row.can_snooze != null ? Boolean(row.can_snooze) : row.skip_allowed !== false && status === 'pending',
+    can_pick: row.can_pick != null ? Boolean(row.can_pick) : status === 'pending',
+    can_snooze: row.can_snooze != null ? Boolean(row.can_snooze) : row.skip_allowed !== false && status === 'pending',
+    can_edit: row.can_edit != null ? Boolean(row.can_edit) : Boolean(row.accepted_by_me) && status === 'picked',
+    accepted_by_me: Boolean(row.accepted_by_me),
+    type: payload.type || 'branch_request',
     group: row,
     data: payload,
   };
@@ -144,9 +157,11 @@ export function statusLabelFor(status) {
   const key = String(status || 'pending').toLowerCase();
   if (key === 'picked') return 'PICKED';
   if (key === 'accepted') return 'ACCEPTED';
+  if (key === 'picking_completed') return 'PICKING COMPLETED';
   if (key === 'rejected') return 'REJECTED';
   if (key === 'expired') return 'EXPIRED – NO RESPONSE';
-  return 'NEW';
+  if (key === 'pending') return 'NEW';
+  return 'REQUEST';
 }
 
 export function ownerName(row) {
@@ -170,8 +185,24 @@ export function canEditRequest(row) {
 }
 
 export function canSnoozeRequest(row) {
-  if (row?.skip_allowed != null) return Boolean(row.skip_allowed);
-  return requestStatus(row) === 'pending' && Number(row?.my_skip_count || 0) < 2;
+  if (row?.can_snooze != null) return Boolean(row.can_snooze);
+  const skipCount = Number(row?.my_skip_count || 0);
+  return requestStatus(row) === 'pending' && skipCount < 2;
+}
+
+export function canCompleteRequest(row) {
+  if (row?.can_complete != null) return Boolean(row.can_complete);
+  return canEditRequest(row) && Boolean(row?.all_lines_answered);
+}
+
+export function canTransferRequest(row) {
+  if (row?.can_transfer != null) return Boolean(row.can_transfer);
+  return canEditRequest(row);
+}
+
+export function canReleaseRequest(row) {
+  if (row?.can_release != null) return Boolean(row.can_release);
+  return canEditRequest(row);
 }
 
 export function isSnoozeAction(actionIdentifier) {

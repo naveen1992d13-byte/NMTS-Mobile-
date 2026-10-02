@@ -11,9 +11,10 @@ export function toRequestAlertData(payload = {}) {
   const totalItems = payload.totalItems ?? payload.total_items ?? 0;
   const totalQuantity =
     payload.totalQuantity ?? payload.total_quantity ?? payload.total_qty ?? 0;
+  const type = String(payload.type || 'branch_request');
   return {
     ...payload,
-    type: 'branch_request',
+    type,
     screen: 'request',
     requestId,
     request_group_key: requestId || payload.request_group_key,
@@ -28,6 +29,7 @@ export function toRequestAlertData(payload = {}) {
     total_qty: totalQuantity,
     total_quantity: totalQuantity,
     round: payload.round,
+    picked_by_name: payload.pickedByName || payload.picked_by_name || '',
   };
 }
 
@@ -35,10 +37,14 @@ export function stopRinging(requestId) {
   NativeRequestAlert?.stopRinging?.(String(requestId || ''));
 }
 
-// Resolves true if this app is already exempt from Android battery
-// optimization (so background FCM delivery + ringing is reliable).
-// On unsupported platforms/native module missing, resolves true so callers
-// don't block on it.
+export function saveNativeAuth(token, baseUrl) {
+  NativeRequestAlert?.saveAuth?.(String(token || ''), String(baseUrl || ''));
+}
+
+export function clearNativeAuth() {
+  NativeRequestAlert?.clearAuth?.();
+}
+
 export async function isIgnoringBatteryOptimizations() {
   try {
     const result = await NativeRequestAlert?.isIgnoringBatteryOptimizations?.();
@@ -48,8 +54,6 @@ export async function isIgnoringBatteryOptimizations() {
   }
 }
 
-// Opens the system "ignore battery optimizations" dialog for this app.
-// No-op if the native module is unavailable (e.g. iOS, Expo Go).
 export function requestIgnoreBatteryOptimizations() {
   NativeRequestAlert?.requestIgnoreBatteryOptimizations?.();
 }
@@ -72,8 +76,12 @@ export function addNativeIncomingAlertListener(listener) {
   });
 }
 
-// Android 14+: true when the OS allows this app to fire a full-screen intent.
-// True on older Android / missing native module so callers do not block.
+export function addNativeRequestPickedListener(listener) {
+  return NativeRequestAlert?.addListener?.('onRequestPicked', (payload) => {
+    listener(toRequestAlertData(payload || {}));
+  });
+}
+
 export async function canUseFullScreenIntent() {
   try {
     const result = await NativeRequestAlert?.canUseFullScreenIntent?.();
@@ -83,7 +91,6 @@ export async function canUseFullScreenIntent() {
   }
 }
 
-// Opens Settings.ACTION_MANAGE_APP_USE_FULL_SCREEN_INTENT for this package.
 export function requestUseFullScreenIntent() {
   NativeRequestAlert?.requestUseFullScreenIntent?.();
 }
