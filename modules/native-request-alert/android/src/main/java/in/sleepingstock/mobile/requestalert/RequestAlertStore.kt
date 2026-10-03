@@ -18,8 +18,10 @@ internal object RequestAlertStore {
   }
 
   fun clearAuth(context: Context) {
-    prefs(context).edit().remove(KEY_TOKEN).remove(KEY_BASE).apply()
+    prefs(context).edit().remove(KEY_TOKEN).remove(KEY_BASE).remove(KEY_ACTIVE).apply()
   }
+
+  fun hasSessionToken(context: Context): Boolean = sessionToken(context).isNotBlank()
 
   fun sessionToken(context: Context): String = prefs(context).getString(KEY_TOKEN, "") ?: ""
 

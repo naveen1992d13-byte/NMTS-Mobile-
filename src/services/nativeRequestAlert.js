@@ -45,6 +45,21 @@ export function clearNativeAuth() {
   NativeRequestAlert?.clearAuth?.();
 }
 
+export function logoutCleanup() {
+  try {
+    if (NativeRequestAlert?.logoutCleanup) {
+      NativeRequestAlert.logoutCleanup();
+      return;
+    }
+  } catch (_e) {}
+  try {
+    NativeRequestAlert?.stopRinging?.('');
+  } catch (_e) {}
+  try {
+    NativeRequestAlert?.clearAuth?.();
+  } catch (_e) {}
+}
+
 export async function isIgnoringBatteryOptimizations() {
   try {
     const result = await NativeRequestAlert?.isIgnoringBatteryOptimizations?.();

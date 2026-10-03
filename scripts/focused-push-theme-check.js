@@ -154,8 +154,17 @@ if (read('src/services/nativeRequestAlert.js').includes('stopRinging') && app.in
 if (app.includes('stopRinging(group.request_group_key') && app.includes('stopRinging(alert.request_group_key')) {
   pass('existing Pick/Snooze handlers call stopRinging');
 } else fail('Pick/Snooze handlers missing stopRinging');
-if (expo.version === '1.4.1' && expo.android.versionCode === 23) pass('APK versionCode is 23');
+if (expo.version === '1.4.2' && expo.android.versionCode === 24) pass('APK versionCode is 24');
 else fail('android versionCode/version not bumped');
+if (fcm.includes('sessionToken') && fcm.includes('skip no session') && ringing.includes('skip no session')) {
+  pass('native FCM and ringing refuse start without session token');
+} else fail('native session-token ring guard missing');
+if (app.includes('await logoutSession()') && app.includes('logoutCleanup()') && app.includes('dismissBranchRequestNotifications()')) {
+  pass('Logout calls backend then stops ring/notifications and clears native auth');
+} else fail('Logout cleanup sequence missing');
+if (app.includes('sessionHeartbeat()') && app.includes('30000')) {
+  pass('foreground heartbeat present');
+} else fail('session heartbeat missing');
 
 if (
   nativePlugin.includes("tools:node") &&

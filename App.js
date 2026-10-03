@@ -34,6 +34,8 @@ import {
   clearApiAuthCache,
   verifyPairing,
   validateSession,
+  sessionHeartbeat,
+  logoutSession,
   getNotifications,
   acceptNotification,
   skipNotification,
@@ -72,6 +74,7 @@ import {
   addNativeIncomingAlertListener,
   addNativeRequestPickedListener,
   stopRinging,
+  logoutCleanup,
   isIgnoringBatteryOptimizations,
   requestIgnoreBatteryOptimizations,
   canUseFullScreenIntent,
@@ -256,10 +259,15 @@ export default function App() {
     });
 
     setOnSessionInvalidated(async () => {
-      clearApiAuthCache();
+      stopRinging();
       await stopRequestRingtone();
+      await dismissBranchRequestNotifications();
+      logoutCleanup();
+      clearApiAuthCache();
       await clearSession();
       if (!mounted) return;
+      incomingAlertRef.current = null;
+      setIncomingAlert(null);
       setSession(null);
       setMandatoryUpdate(null);
       setScreen('pair');
@@ -391,6 +399,27 @@ export default function App() {
     if (session?.deviceId) loadNotifications();
   }, [session?.deviceId, loadNotifications]);
 
+  useEffect(() => {
+    if (!session?.sessionToken) return undefined;
+    let cancelled = false;
+    const beat = async () => {
+      if (cancelled || AppState.currentState !== 'active') return;
+      try {
+        await sessionHeartbeat();
+      } catch (_error) {}
+    };
+    beat();
+    const interval = setInterval(beat, 30000);
+    const sub = AppState.addEventListener('change', (state) => {
+      if (state === 'active') beat();
+    });
+    return () => {
+      cancelled = true;
+      clearInterval(interval);
+      sub.remove();
+    };
+  }, [session?.sessionToken]);
+
   const showIncomingFromPush = useCallback(async (data, notification) => {
     const payload = resolveNotificationData(data);
     if (isRequestPickedPush(payload)) {
@@ -402,6 +431,7 @@ export default function App() {
       loadNotificationsRef.current?.();
       return;
     }
+    if (!sessionRef.current?.sessionToken) return;
     if (!isBranchRequest(payload) && !isRequestTransferredPush(payload)) return;
     const key = String(payload.request_group_key || payload.requestId || payload.request_number || '');
     if (key && incomingShownKeyRef.current === key && incomingAlertRef.current) return;
@@ -854,6 +884,15 @@ export default function App() {
   };
 
   const logout = async () => {
+    try {
+      await logoutSession();
+    } catch (_error) {}
+    stopRinging();
+    await stopRequestRingtone();
+    await dismissBranchRequestNotifications();
+    logoutCleanup();
+    incomingAlertRef.current = null;
+    setIncomingAlert(null);
     clearApiAuthCache();
     await clearSession();
     setSession(null);

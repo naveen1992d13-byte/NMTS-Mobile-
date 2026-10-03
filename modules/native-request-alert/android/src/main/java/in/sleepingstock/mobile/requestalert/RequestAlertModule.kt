@@ -21,10 +21,14 @@ class RequestAlertModule : Module() {
       instance = WeakReference(this@RequestAlertModule)
       val context = appContext.reactContext ?: appContext.currentActivity
       if (context != null) {
-        val persisted = RequestAlertStore.loadActiveAlert(context)
-        if (persisted != null && (persisted.requestId.isNotBlank() || persisted.requestNumber.isNotBlank())) {
-          RequestAlertLog.i("restoring persisted alert")
-          RequestAlertRingingService.startNow(context, persisted)
+        if (RequestAlertStore.sessionToken(context).isBlank()) {
+          RequestAlertStore.clearActiveAlert(context)
+        } else {
+          val persisted = RequestAlertStore.loadActiveAlert(context)
+          if (persisted != null && (persisted.requestId.isNotBlank() || persisted.requestNumber.isNotBlank())) {
+            RequestAlertLog.i("restoring persisted alert")
+            RequestAlertRingingService.startNow(context, persisted)
+          }
         }
       }
     }
@@ -37,6 +41,13 @@ class RequestAlertModule : Module() {
     Function("clearAuth") {
       val context = appContext.reactContext ?: appContext.currentActivity ?: return@Function Unit
       RequestAlertStore.clearAuth(context)
+    }
+
+    Function("logoutCleanup") {
+      val context = appContext.reactContext ?: appContext.currentActivity ?: return@Function Unit
+      RequestAlertStore.clearAuth(context)
+      RequestAlertStore.clearActiveAlert(context)
+      RequestAlertRingingService.stop(context, null)
     }
 
     OnDestroy {

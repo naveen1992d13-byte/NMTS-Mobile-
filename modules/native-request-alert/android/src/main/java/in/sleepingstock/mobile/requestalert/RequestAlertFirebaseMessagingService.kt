@@ -33,6 +33,10 @@ class RequestAlertFirebaseMessagingService : FirebaseMessagingService() {
         return
       }
       RequestAlertPayload.TYPE_REQUEST_TRANSFERRED -> {
+        if (RequestAlertStore.sessionToken(this).isBlank()) {
+          RequestAlertLog.i("RequestAlertRingingService start decision=skip no session")
+          return
+        }
         if (payload == null) {
           RequestAlertLog.i("RequestAlertRingingService start decision=skip")
           return
@@ -42,6 +46,10 @@ class RequestAlertFirebaseMessagingService : FirebaseMessagingService() {
         return
       }
       RequestAlertPayload.TYPE_BRANCH_REQUEST -> {
+        if (RequestAlertStore.sessionToken(this).isBlank()) {
+          RequestAlertLog.i("RequestAlertRingingService start decision=skip no session")
+          return
+        }
         if (payload == null) {
           RequestAlertLog.i("RequestAlertRingingService start decision=skip")
           return

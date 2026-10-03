@@ -44,6 +44,13 @@ class RequestAlertRingingService : Service() {
       return START_NOT_STICKY
     }
 
+    if (RequestAlertStore.sessionToken(this).isBlank()) {
+      RequestAlertLog.i("RequestAlertRingingService start decision=skip no session")
+      RequestAlertStore.clearActiveAlert(this)
+      stopSelf()
+      return START_NOT_STICKY
+    }
+
     val fromIntent = if (intent == null) null else RequestAlertPayload.fromIntent(intent)
     val restored = intent == null
     val payload = when {
@@ -266,6 +273,11 @@ class RequestAlertRingingService : Service() {
     private const val SOUND_RESOURCE = "sleeping_stock_alert_2_rising_dispatch"
 
     fun startNow(context: Context, payload: RequestAlertPayload) {
+      if (RequestAlertStore.sessionToken(context).isBlank()) {
+        RequestAlertLog.i("RequestAlertRingingService start decision=skip no session")
+        RequestAlertStore.clearActiveAlert(context)
+        return
+      }
       val id = payload.requestId.ifBlank { payload.requestNumber }
       if (id.isBlank()) {
         RequestAlertLog.i("blank payload rejected")

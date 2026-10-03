@@ -82,6 +82,7 @@ export function isInvalidDeviceSession(error) {
   const msg = String(error?.message || errorDetailText(error) || '').toLowerCase();
   return (
     msg.includes('re-pair') ||
+    msg.includes('logged out') ||
     msg.includes('missing device session') ||
     msg.includes('invalid or expired') ||
     msg.includes('device is inactive') ||
@@ -151,6 +152,8 @@ export const verifyPairing = ({ mobileUserId, pairingType, pairingCode, pairingT
   });
 
 export const validateSession = () => request('get', '/mobile/session/validate');
+export const sessionHeartbeat = () => request('post', '/mobile/session/heartbeat');
+export const logoutSession = () => request('post', '/mobile/session/logout');
 export const registerPushToken = (pushToken) => request('put', '/mobile/devices/push-token', { data: { push_token: pushToken } });
 export const getNotifications = () => request('get', '/mobile/notifications');
 export const acceptNotification = (requestGroupKey) => request('post', '/mobile/notifications/accept', { data: { request_group_key: requestGroupKey } });
