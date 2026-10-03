@@ -1,10 +1,24 @@
 import * as SecureStore from 'expo-secure-store';
+import { requireOptionalNativeModule } from 'expo-modules-core';
 
 const SESSION_KEY = 'sleeping_stock_mobile_session_v1';
+const NativeRequestAlert = requireOptionalNativeModule('NativeRequestAlert');
+
+function syncNativeAuth(session) {
+  try {
+    if (session?.sessionToken && session?.apiBaseUrl) {
+      NativeRequestAlert?.saveAuth?.(session.sessionToken, session.apiBaseUrl);
+    } else {
+      NativeRequestAlert?.clearAuth?.();
+    }
+  } catch (_error) {
+  }
+}
 
 export async function saveSession(session) {
   try {
     await SecureStore.setItemAsync(SESSION_KEY, JSON.stringify(session));
+    syncNativeAuth(session);
     return true;
   } catch (error) {
     console.log('[session] Failed to save session', error);
@@ -15,7 +29,9 @@ export async function saveSession(session) {
 export async function getSession() {
   try {
     const raw = await SecureStore.getItemAsync(SESSION_KEY);
-    return raw ? JSON.parse(raw) : null;
+    const session = raw ? JSON.parse(raw) : null;
+    if (session) syncNativeAuth(session);
+    return session;
   } catch (error) {
     console.log('[session] Failed to read session', error);
     return null;
@@ -30,6 +46,7 @@ export async function getSessionToken() {
 export async function clearSession() {
   try {
     await SecureStore.deleteItemAsync(SESSION_KEY);
+    syncNativeAuth(null);
     return true;
   } catch (error) {
     console.log('[session] Failed to clear session', error);

@@ -77,9 +77,11 @@ export function StatusPill({ value }) {
   const color =
     value === 'MATCHED' || value === 'ACCEPTED' || value === 'VERIFIED'
       ? SUCCESS
-      : value === 'SHORTAGE' || value === 'PARTIAL'
-        ? WARNING
-        : DANGER;
+      : value === 'UNCONFIRMED'
+        ? MUTED
+        : value === 'SHORTAGE' || value === 'PARTIAL'
+          ? WARNING
+          : DANGER;
   return (
     <View style={[styles.statusPill, { backgroundColor: `${color}18` }]}>
       <Text style={[styles.statusPillText, { color }]}>{value}</Text>

@@ -34,15 +34,24 @@ import {
   clearApiAuthCache,
   verifyPairing,
   validateSession,
+  sessionHeartbeat,
+  logoutSession,
   getNotifications,
   acceptNotification,
   skipNotification,
   submitPartResponse,
+  completePicking,
+  getTransferTargets,
+  transferOwnership,
+  releaseOwnership,
+  RELEASE_REASONS,
+  errorCode,
   searchStock,
   getLatestAppVersion,
   getAutoPerpetualTasks,
   getAutoPerpetualSessionToday,
 } from './src/api';
+import { PAIRING_SERVER_PRESETS, normalizeApiBaseUrl } from './src/config/env';
 import {
   initOfflineQueue,
   enqueueAndTrySync,
@@ -62,9 +71,14 @@ import { startRequestRingtone, stopRequestRingtone } from './src/services/reques
 import {
   addNativePickListener,
   addNativeSnoozeListener,
+  addNativeIncomingAlertListener,
+  addNativeRequestPickedListener,
   stopRinging,
+  logoutCleanup,
   isIgnoringBatteryOptimizations,
   requestIgnoreBatteryOptimizations,
+  canUseFullScreenIntent,
+  requestUseFullScreenIntent,
 } from './src/services/nativeRequestAlert';
 import {
   normalizePartNumber,
@@ -79,7 +93,7 @@ import StockAvailabilityScreen from './src/components/StockAvailabilityScreen';
 import MultiPartSearchScreen from './src/components/MultiPartSearchScreen';
 import MandatoryUpdateScreen from './src/components/MandatoryUpdateScreen';
 import IncomingRequestPopup from './src/components/IncomingRequestPopup';
-import { buildIncomingAlert, findRequestGroup, formatSlaRemaining, isBranchRequest } from './src/utils/requestAlert';
+import { asOwnedPickedRequest, buildIncomingAlert, canCompleteRequest, canEditRequest, canPickRequest, canReleaseRequest, canSnoozeRequest, canTransferRequest, findRequestGroup, formatSlaRemaining, isBranchRequest, isRequestPickedPush, isRequestTransferredPush, ownerName, requestStatus, resolveNotificationData, statusLabelFor } from './src/utils/requestAlert';
 import {
   Empty,
   Field,
@@ -163,6 +177,8 @@ export default function App() {
   const [pairingCode, setPairingCode] = useState('');
   const [pairingBusy, setPairingBusy] = useState(false);
   const [pairingScanned, setPairingScanned] = useState(false);
+  const [manualServerUrl, setManualServerUrl] = useState(PAIRING_SERVER_PRESETS[0].url);
+  const [showManualPairing, setShowManualPairing] = useState(false);
 
   const [notifications, setNotifications] = useState([]);
   const [notificationsBusy, setNotificationsBusy] = useState(false);
@@ -216,6 +232,9 @@ export default function App() {
   const sessionRef = useRef(null);
   const notificationsRef = useRef([]);
   const incomingNotificationRef = useRef(null);
+  const incomingAlertRef = useRef(null);
+  const incomingShownKeyRef = useRef(null);
+  const fsiOnboardingRef = useRef({ initialShown: false, returnChecked: false });
   const openRequestRef = useRef(null);
   const pickRequestRef = useRef(null);
 
@@ -240,10 +259,15 @@ export default function App() {
     });
 
     setOnSessionInvalidated(async () => {
-      clearApiAuthCache();
+      stopRinging();
       await stopRequestRingtone();
+      await dismissBranchRequestNotifications();
+      logoutCleanup();
+      clearApiAuthCache();
       await clearSession();
       if (!mounted) return;
+      incomingAlertRef.current = null;
+      setIncomingAlert(null);
       setSession(null);
       setMandatoryUpdate(null);
       setScreen('pair');
@@ -332,12 +356,24 @@ export default function App() {
       const list = rows || [];
       setNotifications(list);
       notificationsRef.current = list;
-      const live = list.find((row) => {
-        const key = row.request_group_key || row.request_number;
-        return key && !snoozedRequestKeysRef.current.has(key);
-      });
-      if (live && screenRef.current !== 'request') {
-        startRequestRingtone(live.request_group_key || live.request_number);
+      const currentAlert = incomingAlertRef.current;
+      if (currentAlert) {
+        const group = findRequestGroup(list, currentAlert);
+        if (group) {
+          const next = buildIncomingAlert(currentAlert.data || currentAlert, sessionRef.current, group);
+          incomingAlertRef.current = next;
+          setIncomingAlert(next);
+          const keepTransferRing = currentAlert.type === 'request_transferred' && group.accepted_by_me && requestStatus(group) === 'picked';
+          if (!canPickRequest(group) && !keepTransferRing) {
+            stopRinging(group.request_group_key || group.request_number);
+            stopRequestRingtone();
+          }
+        } else {
+          stopRinging(currentAlert.request_group_key || currentAlert.request_number);
+          stopRequestRingtone();
+          incomingAlertRef.current = null;
+          setIncomingAlert(null);
+        }
       }
     } catch (error) {
       Alert.alert('Notifications', friendlyError(error));
@@ -363,20 +399,74 @@ export default function App() {
     if (session?.deviceId) loadNotifications();
   }, [session?.deviceId, loadNotifications]);
 
+  useEffect(() => {
+    if (!session?.sessionToken) return undefined;
+    let cancelled = false;
+    const beat = async () => {
+      if (cancelled || AppState.currentState !== 'active') return;
+      try {
+        await sessionHeartbeat();
+      } catch (_error) {}
+    };
+    beat();
+    const interval = setInterval(beat, 30000);
+    const sub = AppState.addEventListener('change', (state) => {
+      if (state === 'active') beat();
+    });
+    return () => {
+      cancelled = true;
+      clearInterval(interval);
+      sub.remove();
+    };
+  }, [session?.sessionToken]);
+
   const showIncomingFromPush = useCallback(async (data, notification) => {
-    if (!isBranchRequest(data)) return;
+    const payload = resolveNotificationData(data);
+    if (isRequestPickedPush(payload)) {
+      const key = payload.request_group_key || payload.requestId || payload.request_number;
+      stopRinging(key);
+      stopRequestRingtone();
+      incomingAlertRef.current = null;
+      setIncomingAlert(null);
+      loadNotificationsRef.current?.();
+      return;
+    }
+    if (!sessionRef.current?.sessionToken) return;
+    if (!isBranchRequest(payload) && !isRequestTransferredPush(payload)) return;
+    const key = String(payload.request_group_key || payload.requestId || payload.request_number || '');
+    if (key && incomingShownKeyRef.current === key && incomingAlertRef.current) return;
+    if (key) incomingShownKeyRef.current = key;
     incomingNotificationRef.current = notification || incomingNotificationRef.current || null;
     let rows = notificationsRef.current || [];
     try {
       rows = (await getNotifications()) || rows;
       setNotifications(rows);
     } catch (_e) {}
-    const group = findRequestGroup(rows, data);
-    setIncomingAlert(buildIncomingAlert(data, sessionRef.current, group));
+    const group = findRequestGroup(rows, payload);
+    const alert = buildIncomingAlert(payload, sessionRef.current, group);
+    incomingAlertRef.current = alert;
+    setIncomingAlert(alert);
   }, []);
 
   const snoozeIncomingAlert = useCallback(async (data) => {
     const alert = data || incomingAlert || {};
+    const pending = requestStatus(alert) === 'pending' || !alert.status;
+    const skipAllowed = alert.skip_allowed !== false && pending;
+    if (pending && !skipAllowed) {
+      Alert.alert('Snooze unavailable', 'This is the third alert — pick this request.');
+      return;
+    }
+    if (skipAllowed && alert.request_group_key) {
+      try {
+        await skipNotification(alert.request_group_key);
+      } catch (error) {
+        Alert.alert('Unable to Snooze', friendlyError(error));
+        loadNotificationsRef.current?.();
+        return;
+      }
+    }
+    incomingShownKeyRef.current = null;
+    incomingAlertRef.current = null;
     stopRinging(alert.request_group_key || alert.requestId || alert.request_number);
     await dismissRequestNotification(incomingNotificationRef.current);
     await dismissBranchRequestNotifications();
@@ -385,6 +475,7 @@ export default function App() {
     if (alert.request_number) snoozedRequestKeysRef.current.add(alert.request_number);
     await stopRequestRingtone();
     setIncomingAlert(null);
+    loadNotificationsRef.current?.();
   }, [incomingAlert]);
 
   const pickIncomingFromPush = useCallback(async (data) => {
@@ -394,6 +485,12 @@ export default function App() {
       setNotifications(rows);
     } catch (_e) {}
     const group = findRequestGroup(rows, data);
+    if (group && (group.accepted_by_me || data?.type === 'request_transferred') && openRequestRef.current) {
+      incomingAlertRef.current = null;
+      setIncomingAlert(null);
+      openRequestRef.current(data?.type === 'request_transferred' ? group : asOwnedPickedRequest(group));
+      return;
+    }
     if (group && pickRequestRef.current) {
       await pickRequestRef.current(group);
       return;
@@ -411,6 +508,47 @@ export default function App() {
     const snoozeSub = addNativeSnoozeListener((data) => {
       snoozeIncomingAlert(data);
     });
+    const incomingSub = addNativeIncomingAlertListener((data) => {
+      const key = data.request_group_key || data.requestId || data.request_number;
+      if (key && snoozedRequestKeysRef.current.has(key) && data.type !== 'request_transferred') return;
+      showIncomingFromPush(data);
+    });
+    const pickedSub = addNativeRequestPickedListener((data) => {
+      const key = data.request_group_key || data.requestId || data.request_number;
+      const name = data.picked_by_name;
+      stopRinging(key);
+      stopRequestRingtone();
+      incomingAlertRef.current = null;
+      setIncomingAlert(null);
+      if (name) Alert.alert('Already Picked', `Already picked by ${name}`);
+      loadNotificationsRef.current?.();
+    });
+    const promptFullScreenIntent = (isReturn) => {
+      if (isReturn) {
+        if (fsiOnboardingRef.current.returnChecked) return;
+        fsiOnboardingRef.current.returnChecked = true;
+      } else {
+        if (fsiOnboardingRef.current.initialShown) return;
+        fsiOnboardingRef.current.initialShown = true;
+      }
+      Alert.alert(
+        'Allow lock-screen request alerts',
+        'Incoming stock requests need permission to wake the screen and show the request over the lock screen. Please allow full-screen notifications on the next screen.',
+        [{ text: 'Continue', onPress: () => requestUseFullScreenIntent() }]
+      );
+    };
+    const onFsiAppState = (state) => {
+      if (state !== 'active' || Platform.OS !== 'android') return;
+      if (!fsiOnboardingRef.current.initialShown || fsiOnboardingRef.current.returnChecked) return;
+      (async () => {
+        try {
+          const allowed = await canUseFullScreenIntent();
+          if (!allowed) promptFullScreenIntent(true);
+          else fsiOnboardingRef.current.returnChecked = true;
+        } catch (_e) {}
+      })();
+    };
+    const fsiAppSub = AppState.addEventListener('change', onFsiAppState);
     // One-time permission onboarding for this device session. Runs the
     // moment the app is logged in / paired (i.e. right after first install
     // + first open), so every permission the app needs is asked up front
@@ -421,7 +559,10 @@ export default function App() {
     //    dialog on every OEM (Samsung, Xiaomi, Vivo, Oppo, OnePlus,
     //    stock Android). Without this, background/locked-screen alerts
     //    can be delayed or dropped by the OS regardless of phone brand.
-    // 3. Camera permission — needed for QR pairing and part-number scan.
+    // 3. Android 14+ full-screen intent — needed to wake a locked phone
+    //    and show IncomingRequestPopup. Re-checked once when the user
+    //    returns from Settings; not re-prompted on every foreground.
+    // 4. Camera permission — needed for QR pairing and part-number scan.
     if (Platform.OS === 'android') {
       (async () => {
         try {
@@ -433,6 +574,10 @@ export default function App() {
               [{ text: 'Continue', onPress: () => requestIgnoreBatteryOptimizations() }]
             );
           }
+        } catch (_e) {}
+        try {
+          const allowed = await canUseFullScreenIntent();
+          if (!allowed) promptFullScreenIntent(false);
         } catch (_e) {}
         try {
           if (!permission?.granted) {
@@ -476,7 +621,7 @@ export default function App() {
         }
       },
       onNotificationPicked: (data) => {
-        pickIncomingFromPush(data);
+        showIncomingFromPush(data);
       },
       onNotificationSnoozed: (data) => {
         snoozeIncomingAlert(data);
@@ -492,6 +637,9 @@ export default function App() {
     return () => {
       pickSub?.remove?.();
       snoozeSub?.remove?.();
+      incomingSub?.remove?.();
+      pickedSub?.remove?.();
+      fsiAppSub?.remove?.();
       teardown();
     };
   }, [session?.deviceId, showIncomingFromPush, pickIncomingFromPush, snoozeIncomingAlert]);
@@ -504,15 +652,18 @@ export default function App() {
           const rows = await getNotifications();
           notificationsRef.current = rows || [];
           setNotifications(rows || []);
+          const currentAlert = incomingAlertRef.current;
+          if (currentAlert) {
+            const group = findRequestGroup(rows || [], currentAlert);
+            const keepTransfer = currentAlert.type === 'request_transferred' && group?.accepted_by_me && requestStatus(group) === 'picked';
+            if (!group || (!canPickRequest(group) && !keepTransfer)) {
+              stopRinging(currentAlert.request_group_key || currentAlert.request_number);
+              stopRequestRingtone();
+              incomingAlertRef.current = null;
+              setIncomingAlert(null);
+            }
+          }
         } catch (_e) {}
-        if (screenRef.current === 'request') return;
-        const live = (notificationsRef.current || []).find((row) => {
-          const key = row.request_group_key || row.request_number;
-          return key && !snoozedRequestKeysRef.current.has(key);
-        });
-        if (live && Platform.OS !== 'android') {
-          startRequestRingtone(live.request_group_key || live.request_number);
-        }
       })();
     };
     const sub = AppState.addEventListener('change', onAppState);
@@ -586,13 +737,59 @@ export default function App() {
     if (screen === 'notifications') loadNotifications();
   }, [screen, loadNotifications]);
 
-  const pairDevice = async ({ qrMobileUserId, pairingType, qrPairingCode, apiBaseUrl, pairingToken }) => {
-    if (!userName.trim() || !mobileNumber.trim()) {
-      Alert.alert('Required', 'Enter your name and mobile number before scanning the QR code.');
+  useEffect(() => {
+    if (!session?.deviceId) return undefined;
+    const watch = screen === 'notifications' || screen === 'request' || Boolean(incomingAlert);
+    if (!watch) return undefined;
+    const timer = setInterval(() => loadNotificationsRef.current?.(), 8000);
+    return () => clearInterval(timer);
+  }, [session?.deviceId, screen, incomingAlert]);
+
+  useEffect(() => {
+    if (!selectedRequest?.request_group_key) return;
+    const next = findRequestGroup(notifications, selectedRequest);
+    if (!next) return;
+    if (selectedRequest.accepted_by_me && requestStatus(selectedRequest) === 'picked' && !next.accepted_by_me && requestStatus(next) === 'pending') {
       return;
     }
-    if (!qrPairingCode?.trim() || !apiBaseUrl || !pairingToken || (pairingType === 'REPAIR' && !qrMobileUserId?.trim())) {
-      Alert.alert('Scan QR Code', 'Scan the pairing QR code generated from the NMTS website.');
+    if (
+      next.status !== selectedRequest.status ||
+      next.picked_by_name !== selectedRequest.picked_by_name ||
+      next.accepted_by_me !== selectedRequest.accepted_by_me ||
+      next.rejection_reason !== selectedRequest.rejection_reason
+    ) {
+      setSelectedRequest(next.accepted_by_me && requestStatus(next) === 'picked' ? asOwnedPickedRequest(next) : next);
+      if (!canEditRequest(next) && canEditRequest(selectedRequest)) {
+        setRequestRows(
+          (next.parts || []).map((part) => ({
+            orderRequestId: part.order_request_id,
+            partNumber: part.part_number,
+            partName: part.description || part.part_name || '-',
+            requestedQty: numberValue(part.requested_qty),
+            availableQty: numberValue(part.available_qty_at_request ?? part.available_qty),
+            loc: requestPartLoc(part),
+            purchaseAging: part.purchase_aging_days ?? part.purchase_aging ?? '-',
+            salesAging: part.sales_aging_days ?? part.sales_aging ?? '-',
+            value: numberValue(part.part_value ?? part.value),
+            acceptedQty: part.response_saved || part.accepted_qty != null ? String(part.accepted_qty) : '',
+            remark: part.remark || '',
+          }))
+        );
+      }
+    }
+  }, [notifications, selectedRequest]);
+
+  const pairDevice = async ({ qrMobileUserId, pairingType, qrPairingCode, apiBaseUrl, pairingToken }) => {
+    if (!userName.trim() || !mobileNumber.trim()) {
+      Alert.alert('Required', 'Enter your name and mobile number before pairing.');
+      return;
+    }
+    if (!qrPairingCode?.trim() || !apiBaseUrl) {
+      Alert.alert('Pairing required', 'Enter the website pairing code and HTTPS server URL, or scan the QR.');
+      return;
+    }
+    if (pairingType === 'REPAIR' && pairingToken && !qrMobileUserId?.trim()) {
+      Alert.alert('Scan QR Code', 'Re-pair QR is missing the Mobile User ID.');
       return;
     }
     setPairingBusy(true);
@@ -611,7 +808,7 @@ export default function App() {
         mobileUserId: qrMobileUserId?.trim()?.toUpperCase() || null,
         pairingType,
         pairingCode: qrPairingCode.trim().toUpperCase(),
-        pairingToken,
+        pairingToken: pairingToken || null,
         apiBaseUrl,
         deviceUserName: userName.trim(),
         deviceUserMobile: mobileNumber.trim(),
@@ -690,6 +887,15 @@ export default function App() {
   };
 
   const logout = async () => {
+    try {
+      await logoutSession();
+    } catch (_error) {}
+    stopRinging();
+    await stopRequestRingtone();
+    await dismissBranchRequestNotifications();
+    logoutCleanup();
+    incomingAlertRef.current = null;
+    setIncomingAlert(null);
     clearApiAuthCache();
     await clearSession();
     setSession(null);
@@ -1024,10 +1230,27 @@ export default function App() {
   };
 
   const pickRequest = async (group) => {
+    if (group?.accepted_by_me) {
+      openRequest(group);
+      return;
+    }
+    if (!canPickRequest(group)) {
+      const name = ownerName(group);
+      Alert.alert(
+        requestStatus(group) === 'picked' ? 'Already Picked' : 'Unavailable',
+        requestStatus(group) === 'picked'
+          ? `Already picked by ${name || 'another user'}`
+          : statusLabelFor(requestStatus(group))
+      );
+      loadNotifications();
+      return;
+    }
     setRequestBusy(true);
     try {
-      stopRinging(group.request_group_key || group.request_number);
       await acceptNotification(group.request_group_key);
+      incomingShownKeyRef.current = null;
+      incomingAlertRef.current = null;
+      stopRinging(group.request_group_key || group.request_number);
       await dismissRequestNotification(incomingNotificationRef.current);
       await dismissBranchRequestNotifications();
       incomingNotificationRef.current = null;
@@ -1035,9 +1258,22 @@ export default function App() {
       stopRequestRingtone();
       if (group.request_group_key) snoozedRequestKeysRef.current.add(group.request_group_key);
       if (group.request_number) snoozedRequestKeysRef.current.add(group.request_number);
-      openRequest(group);
+      const rows = await getNotifications().catch(() => notificationsRef.current || []);
+      setNotifications(rows || []);
+      notificationsRef.current = rows || [];
+      const next = asOwnedPickedRequest(findRequestGroup(rows, group) || group);
+      openRequest(next);
     } catch (error) {
-      Alert.alert(error?.status === 409 ? 'Already Picked' : 'Unable to Pick', friendlyError(error));
+      const name = error?.data?.detail?.picked_by_name;
+      const code = errorCode(error) || error?.code;
+      if (code === 'ALREADY_PICKED' || error?.status === 409) {
+        stopRinging(group.request_group_key || group.request_number);
+        incomingAlertRef.current = null;
+        setIncomingAlert(null);
+        Alert.alert('Already Picked', `Already picked by ${name || 'another user'}`);
+      } else {
+        Alert.alert('Unable to Pick', friendlyError(error));
+      }
       loadNotifications();
     } finally {
       setRequestBusy(false);
@@ -1045,6 +1281,10 @@ export default function App() {
   };
 
   const snoozeRequest = async (group) => {
+    if (!canSnoozeRequest(group)) {
+      Alert.alert('Snooze unavailable', 'This is the third alert — pick this request.');
+      return;
+    }
     try {
       stopRinging(group.request_group_key || group.request_number);
       const result = await skipNotification(group.request_group_key);
@@ -1056,6 +1296,7 @@ export default function App() {
       loadNotifications();
     } catch (error) {
       Alert.alert('Unable to Snooze', friendlyError(error));
+      loadNotifications();
     }
   };
 
@@ -1076,8 +1317,8 @@ export default function App() {
         purchaseAging: part.purchase_aging_days ?? part.purchase_aging ?? '-',
         salesAging: part.sales_aging_days ?? part.sales_aging ?? '-',
         value: numberValue(part.part_value ?? part.value),
-        acceptedQty: String(part.requested_qty ?? 0),
-        remark: '',
+        acceptedQty: part.response_saved || part.accepted_qty != null ? String(part.accepted_qty) : '',
+        remark: part.remark || '',
       }))
     );
     setScreen('request');
@@ -1089,14 +1330,25 @@ export default function App() {
   });
 
   const submitRequestResponse = async () => {
+    if (!canEditRequest(selectedRequest)) {
+      Alert.alert(
+        'Already Picked',
+        `This request is locked${ownerName(selectedRequest) ? ` by ${ownerName(selectedRequest)}` : ''}.`
+      );
+      return;
+    }
     for (const row of requestRows) {
+      if (String(row.acceptedQty ?? '').trim() === '') {
+        Alert.alert('Response required', `Enter an accepted quantity for ${row.partNumber}.`);
+        return;
+      }
       const qty = numberValue(row.acceptedQty);
       if (qty < 0 || qty > row.requestedQty) {
         Alert.alert('Invalid Quantity', `Check accepted quantity for ${row.partNumber}.`);
         return;
       }
       if (qty < row.requestedQty && !row.remark.trim()) {
-        Alert.alert('Remark Required', `Enter a remark for ${row.partNumber}.`);
+        Alert.alert('Remark Required', `Enter a remark for ${row.partNumber}. Zero accepted qty covers a rejection.`);
         return;
       }
     }
@@ -1111,12 +1363,133 @@ export default function App() {
           remark: row.remark.trim(),
         }))
       );
-      Alert.alert('Submitted', 'Request response submitted successfully.');
-      setScreen('notifications');
+      Alert.alert('Responses saved', 'Accepted quantities saved. Complete picking when every line is answered.');
+      const rows = await getNotifications().catch(() => notificationsRef.current || []);
+      setNotifications(rows || []);
+      const next = findRequestGroup(rows, selectedRequest);
+      if (next) setSelectedRequest(next);
     } catch (error) {
       Alert.alert('Submit Failed', friendlyError(error));
+      loadNotifications();
     } finally {
       setRequestBusy(false);
+    }
+  };
+
+  const completeRequestPicking = async () => {
+    if (!canEditRequest(selectedRequest)) {
+      Alert.alert('Unavailable', 'Only the owner can complete picking.');
+      return;
+    }
+    const unanswered = requestRows.some((row) => String(row.acceptedQty ?? '').trim() === '');
+    if (unanswered) {
+      Alert.alert('Response required', 'Enter an accepted quantity for every line before finishing picking.');
+      return;
+    }
+    setRequestBusy(true);
+    try {
+      await completePicking(selectedRequest.request_group_key);
+      Alert.alert('Picking completed', 'This request is now waiting for web dispatch.');
+      loadNotifications();
+      setScreen('notifications');
+    } catch (error) {
+      Alert.alert('Unable to complete', friendlyError(error));
+      loadNotifications();
+    } finally {
+      setRequestBusy(false);
+    }
+  };
+
+  const transferRequestOwnership = async () => {
+    if (!canTransferRequest(selectedRequest)) {
+      Alert.alert('Unavailable', 'Only the owner can transfer this request.');
+      return;
+    }
+    setRequestBusy(true);
+    try {
+      const targets = await getTransferTargets(selectedRequest.request_group_key);
+      if (!targets?.length) {
+        Alert.alert('No users', 'No other active paired user on this branch.');
+        return;
+      }
+      Alert.alert(
+        'Transfer ownership',
+        'Choose a same-branch user. They become the owner immediately.',
+        [
+          { text: 'Cancel', style: 'cancel' },
+          ...targets.slice(0, 5).map((target) => ({
+            text: target.name || target.mobile_user_id,
+            onPress: async () => {
+              try {
+                await transferOwnership(selectedRequest.request_group_key, target.mobile_user_id);
+                Alert.alert('Transferred', `Now owned by ${target.name || target.mobile_user_id}.`);
+                loadNotifications();
+                setScreen('notifications');
+              } catch (error) {
+                Alert.alert('Transfer failed', friendlyError(error));
+              }
+            },
+          })),
+        ]
+      );
+    } catch (error) {
+      Alert.alert('Transfer failed', friendlyError(error));
+    } finally {
+      setRequestBusy(false);
+    }
+  };
+
+  const releaseRequestOwnership = async () => {
+    if (!canReleaseRequest(selectedRequest)) {
+      Alert.alert('Unavailable', 'Only the owner can release this request.');
+      return;
+    }
+    Alert.alert('Release ownership', 'Choose a reason. The request returns to the branch pool.', [
+      { text: 'Cancel', style: 'cancel' },
+      ...RELEASE_REASONS.map((reason) => ({
+        text: reason.label,
+        onPress: () => {
+          if (reason.value === 'OTHER') {
+            Alert.prompt
+              ? Alert.prompt('Release note', 'Optional note', async (note) => {
+                try {
+                  await releaseOwnership(selectedRequest.request_group_key, reason.value, note || '');
+                  Alert.alert('Released', 'The request is back in the branch pool.');
+                  loadNotifications();
+                  setScreen('notifications');
+                } catch (error) {
+                  Alert.alert('Release failed', friendlyError(error));
+                }
+              })
+              : releaseOwnership(selectedRequest.request_group_key, reason.value, '').then(() => {
+                Alert.alert('Released', 'The request is back in the branch pool.');
+                loadNotifications();
+                setScreen('notifications');
+              }).catch((error) => Alert.alert('Release failed', friendlyError(error)));
+            return;
+          }
+          releaseOwnership(selectedRequest.request_group_key, reason.value, '').then(() => {
+            Alert.alert('Released', 'The request is back in the branch pool.');
+            loadNotifications();
+            setScreen('notifications');
+          }).catch((error) => Alert.alert('Release failed', friendlyError(error)));
+        },
+      })),
+    ]);
+  };
+
+  const pairManually = async () => {
+    try {
+      const apiBaseUrl = normalizeApiBaseUrl(manualServerUrl);
+      await pairDevice({
+        qrMobileUserId: mobileUserId.trim().toUpperCase() || null,
+        pairingType: mobileUserId.trim() ? 'REPAIR' : 'NEW',
+        qrPairingCode: pairingCode.trim().toUpperCase(),
+        apiBaseUrl,
+        pairingToken: null,
+      });
+    } catch (error) {
+      Alert.alert('Pairing Failed', friendlyError(error));
     }
   };
 
@@ -1162,19 +1535,27 @@ export default function App() {
       {screen === 'pair' && (
         <PairScreen
           mobileUserId={mobileUserId}
+          setMobileUserId={setMobileUserId}
           userName={userName}
           setUserName={setUserName}
           mobileNumber={mobileNumber}
           setMobileNumber={setMobileNumber}
+          pairingCode={pairingCode}
+          setPairingCode={setPairingCode}
+          manualServerUrl={manualServerUrl}
+          setManualServerUrl={setManualServerUrl}
+          showManual={showManualPairing}
+          setShowManual={setShowManualPairing}
           busy={pairingBusy}
           onScanQr={() => openScanner('pairing')}
+          onManualPair={pairManually}
         />
       )}
       {screen === 'home' && (
           <HomeScreen
             session={session}
             pendingCount={pendingCount}
-            notificationCount={notifications.length}
+            notificationCount={notifications.filter((row) => requestStatus(row) === 'pending').length}
             navigate={setScreen}
             logout={logout}
           />
@@ -1269,7 +1650,11 @@ export default function App() {
             setRequestRows((items) => items.map((x) => (x.orderRequestId === id ? { ...x, [field]: value } : x)))
           }
           onSubmit={submitRequestResponse}
+          onComplete={completeRequestPicking}
+          onTransfer={transferRequestOwnership}
+          onRelease={releaseRequestOwnership}
           busy={requestBusy}
+          canEdit={canEditRequest(selectedRequest)}
         />
       )}
       {screen === 'scanner' &&
@@ -1296,6 +1681,7 @@ export default function App() {
         visible={Boolean(incomingAlert)}
         alert={incomingAlert}
         onPick={() => pickIncomingFromPush(incomingAlert?.data || incomingAlert)}
+        onOpen={() => pickIncomingFromPush(incomingAlert?.data || incomingAlert)}
         onSnooze={snoozeIncomingAlert}
       />
     </SafeAreaView>
@@ -1326,7 +1712,43 @@ function PairScreen(props) {
             first pairing; Re-pair keeps the same ID.
           </Text>
           <PrimaryButton title="Scan NMTS Pairing QR" onPress={props.onScanQr} busy={props.busy} />
-          {!!props.mobileUserId && <Text style={styles.detectedUser}>Detected User: {props.mobileUserId}</Text>}
+          <TouchableOpacity style={{ marginTop: 14 }} onPress={() => props.setShowManual(!props.showManual)}>
+            <Text style={styles.pendingAction}>Enter Code Manually</Text>
+          </TouchableOpacity>
+          {props.showManual ? (
+            <View style={{ marginTop: 14 }}>
+              <Field
+                label="Website pairing code"
+                value={props.pairingCode}
+                onChangeText={(value) => props.setPairingCode(String(value || '').toUpperCase())}
+                autoCapitalize="characters"
+              />
+              <Field
+                label="Re-pair Mobile User ID (optional)"
+                value={props.mobileUserId}
+                onChangeText={(value) => props.setMobileUserId(String(value || '').toUpperCase())}
+                autoCapitalize="characters"
+              />
+              <Text style={styles.qrInfo}>HTTPS server URL</Text>
+              {PAIRING_SERVER_PRESETS.map((preset) => (
+                <TouchableOpacity
+                  key={preset.url}
+                  style={[styles.snoozeButton, props.manualServerUrl === preset.url && { borderColor: BLUE }]}
+                  onPress={() => props.setManualServerUrl(preset.url)}
+                >
+                  <Text style={styles.snoozeText}>{preset.label}</Text>
+                </TouchableOpacity>
+              ))}
+              <Field
+                label="Custom HTTPS URL"
+                value={props.manualServerUrl}
+                onChangeText={props.setManualServerUrl}
+                autoCapitalize="none"
+              />
+              <PrimaryButton title="Pair with Code" onPress={props.onManualPair} busy={props.busy} />
+            </View>
+          ) : null}
+          {!!props.mobileUserId && !props.showManual && <Text style={styles.detectedUser}>Detected User: {props.mobileUserId}</Text>}
         </View>
       </ScrollView>
     </KeyboardAvoidingView>
@@ -1532,35 +1954,63 @@ function NotificationsScreen({ onBack, rows, busy, refresh, openRequest, pickReq
         keyExtractor={(item) => item.request_group_key}
         contentContainerStyle={styles.listContent}
         ListEmptyComponent={!busy ? <Empty text="No pending request for your branch." /> : null}
-        renderItem={({ item }) => (
-          <TouchableOpacity style={styles.requestCard} onPress={() => openRequest(item)}>
-            <View style={styles.rowBetween}>
-              <Text style={styles.requestNo}>{item.request_number}</Text>
-              <Text style={styles.newBadge}>NEW</Text>
-            </View>
-            <Text style={styles.requestFrom}>From: {item.requesting_dealer || '-'} / {item.requesting_branch || '-'}</Text>
-            <Text style={styles.requestFrom}>To: {item.supplying_dealer || '-'} / {item.supplying_branch || '-'}</Text>
-            <Text style={styles.requestMeta}>
-              Items: {item.total_items || 0}    Qty: {item.total_quantity || 0}    SLA: {formatSlaRemaining(item.response_deadline)}
-            </Text>
-            <View style={styles.requestActions}>
-              <TouchableOpacity style={styles.snoozeButton} onPress={() => snoozeRequest(item)}>
-                <Text style={styles.snoozeText}>Snooze</Text>
+        renderItem={({ item }) => {
+          const status = requestStatus(item);
+          const label = item.status_label || statusLabelFor(status);
+          const owner = ownerName(item);
+          const showPick = canPickRequest(item);
+          const showSnooze = canSnoozeRequest(item);
+          const showOwner = owner && status !== 'pending';
+          return (
+            <View style={styles.requestCard}>
+              <TouchableOpacity onPress={() => openRequest(item)}>
+                <View style={styles.rowBetween}>
+                  <Text style={styles.requestNo}>{item.request_number}</Text>
+                  <Text style={[styles.newBadge, status !== 'pending' && styles.statusBadgeMuted]}>{label}</Text>
+                </View>
+                <Text style={styles.requestFrom}>From: {item.requesting_dealer || '-'} / {item.requesting_branch || '-'}</Text>
+                <Text style={styles.requestFrom}>To: {item.supplying_dealer || '-'} / {item.supplying_branch || '-'}</Text>
+                {showOwner ? (
+                  <Text style={styles.requestOwner}>
+                    {status === 'accepted' || status === 'picking_completed' ? 'Accepted by' : status === 'rejected' ? 'Rejected by' : 'Picked by'} {owner}
+                  </Text>
+                ) : null}
+                {status === 'rejected' && item.rejection_reason ? (
+                  <Text style={styles.requestOwner}>Reason: {item.rejection_reason}</Text>
+                ) : null}
+                <Text style={styles.requestMeta}>
+                  Items: {item.total_items || 0}    Qty: {item.total_quantity || 0}    SLA: {formatSlaRemaining(item.response_deadline)}
+                </Text>
               </TouchableOpacity>
-              <TouchableOpacity style={styles.pickButton} onPress={() => pickRequest(item)}>
-                <Text style={styles.pickText}>Pick Request</Text>
-              </TouchableOpacity>
+              {(showPick || showSnooze) && (
+                <View style={styles.requestActions}>
+                  {showSnooze ? (
+                    <TouchableOpacity style={styles.snoozeButton} onPress={() => snoozeRequest(item)}>
+                      <Text style={styles.snoozeText}>Snooze</Text>
+                    </TouchableOpacity>
+                  ) : null}
+                  {showPick ? (
+                    <TouchableOpacity style={styles.pickButton} onPress={() => pickRequest(item)}>
+                      <Text style={styles.pickText}>Pick Request</Text>
+                    </TouchableOpacity>
+                  ) : null}
+                </View>
+              )}
             </View>
-          </TouchableOpacity>
-        )}
+          );
+        }}
       />
     </View>
   );
 }
 
-function RequestScreen({ onBack, request, rows, updateRow, onSubmit, busy }) {
+function RequestScreen({ onBack, request, rows, updateRow, onSubmit, onComplete, onTransfer, onRelease, busy, canEdit }) {
   const scrollRef = useRef(null);
   const qtyRefs = useRef({});
+  const status = requestStatus(request);
+  const owner = ownerName(request);
+  const locked = !canEdit;
+  const allAnswered = rows.length > 0 && rows.every((row) => String(row.acceptedQty ?? '').trim() !== '');
 
   const keepQtyVisible = (orderRequestId) => {
     const node = qtyRefs.current[orderRequestId];
@@ -1578,6 +2028,21 @@ function RequestScreen({ onBack, request, rows, updateRow, onSubmit, busy }) {
     }, Platform.OS === 'android' ? 280 : 80);
   };
 
+  const lockMessage =
+    status === 'expired'
+      ? 'EXPIRED – NO RESPONSE'
+      : status === 'picking_completed'
+        ? `PICKING COMPLETED${owner ? ` · ${owner}` : ''}`
+        : status === 'picked' && owner && locked
+          ? `Picked by ${owner}`
+          : status === 'accepted' && owner
+            ? `Accepted by ${owner}`
+            : status === 'rejected' && owner
+              ? `Rejected by ${owner}${request?.rejection_reason ? ` — ${request.rejection_reason}` : ''}`
+              : locked
+                ? 'Pick this request to edit and submit.'
+                : '';
+
   return (
     <KeyboardAvoidingView
       style={styles.flex}
@@ -1588,6 +2053,7 @@ function RequestScreen({ onBack, request, rows, updateRow, onSubmit, busy }) {
       <View style={styles.requestHeader}>
         <Text style={styles.requestHeaderNo}>{request?.request_number}</Text>
         <Text style={styles.requestHeaderSub}>{request?.requesting_branch || request?.requesting_dealer || '-'}</Text>
+        {lockMessage ? <Text style={styles.requestLockNote}>{lockMessage}</Text> : null}
       </View>
       <ScrollView
         ref={scrollRef}
@@ -1598,8 +2064,15 @@ function RequestScreen({ onBack, request, rows, updateRow, onSubmit, busy }) {
         automaticallyAdjustKeyboardInsets
       >
         {rows.map((row) => {
+          const confirmed = String(row.acceptedQty ?? '').trim() !== '';
           const accepted = numberValue(row.acceptedQty);
-          const status = accepted === row.requestedQty ? 'ACCEPTED' : accepted === 0 ? 'REJECTED' : 'PARTIAL';
+          const partStatus = !confirmed
+            ? 'UNCONFIRMED'
+            : accepted === row.requestedQty
+              ? 'ACCEPTED'
+              : accepted === 0
+                ? 'ZERO'
+                : 'PARTIAL';
           return (
             <View key={row.orderRequestId} style={styles.requestPartCard}>
               <Text style={styles.partNumberText}>{row.partNumber}</Text>
@@ -1616,38 +2089,65 @@ function RequestScreen({ onBack, request, rows, updateRow, onSubmit, busy }) {
                 </View>
                 <View style={styles.qtyField}>
                   <Text style={styles.qtyLabel}>Accepted Qty</Text>
-                  <TextInput
-                    ref={(el) => {
-                      qtyRefs.current[row.orderRequestId] = el;
-                    }}
-                    style={styles.acceptedQtyInput}
-                    value={row.acceptedQty}
-                    onChangeText={(v) => updateRow(row.orderRequestId, 'acceptedQty', v.replace(/[^0-9.]/g, ''))}
-                    keyboardType="decimal-pad"
-                    onFocus={() => keepQtyVisible(row.orderRequestId)}
-                  />
+                  {locked ? (
+                    <Text style={styles.qtyReadOnly}>{confirmed ? row.acceptedQty : '—'}</Text>
+                  ) : (
+                    <TextInput
+                      ref={(el) => {
+                        qtyRefs.current[row.orderRequestId] = el;
+                      }}
+                      style={styles.acceptedQtyInput}
+                      value={row.acceptedQty}
+                      onChangeText={(v) => updateRow(row.orderRequestId, 'acceptedQty', v.replace(/[^0-9.]/g, ''))}
+                      keyboardType="decimal-pad"
+                      placeholder="—"
+                      placeholderTextColor={MUTED}
+                      onFocus={() => keepQtyVisible(row.orderRequestId)}
+                    />
+                  )}
                 </View>
               </View>
               <View style={styles.requestCardStatus}>
-                <StatusPill value={status} />
+                <StatusPill value={partStatus} />
               </View>
-              {status !== 'ACCEPTED' && (
-                <TextInput
-                  style={styles.remarkInput}
-                  value={row.remark}
-                  onChangeText={(v) => updateRow(row.orderRequestId, 'remark', v)}
-                  placeholder="Remark required"
-                  placeholderTextColor={MUTED}
-                  onFocus={() => keepQtyVisible(row.orderRequestId)}
-                />
+              {confirmed && partStatus !== 'ACCEPTED' && (
+                locked ? (
+                  row.remark ? <Text style={styles.remarkReadOnly}>{row.remark}</Text> : null
+                ) : (
+                  <TextInput
+                    style={styles.remarkInput}
+                    value={row.remark}
+                    onChangeText={(v) => updateRow(row.orderRequestId, 'remark', v)}
+                    placeholder="Remark required if qty is below requested"
+                    placeholderTextColor={MUTED}
+                    onFocus={() => keepQtyVisible(row.orderRequestId)}
+                  />
+                )
               )}
             </View>
           );
         })}
       </ScrollView>
-      <View style={styles.submitBar}>
-        <PrimaryButton title="Submit Request Response" onPress={onSubmit} busy={busy} />
-      </View>
+      {canEdit ? (
+        <View style={styles.submitBar}>
+          <PrimaryButton title="Submit Responses" onPress={onSubmit} busy={busy} />
+          <View style={{ height: 10 }} />
+          <PrimaryButton
+            title="Picking Finished"
+            onPress={onComplete}
+            busy={busy}
+            disabled={!allAnswered}
+          />
+          <View style={styles.requestActions}>
+            <TouchableOpacity style={styles.snoozeButton} onPress={onTransfer} disabled={busy || !canTransferRequest(request)}>
+              <Text style={styles.snoozeText}>Transfer Picking</Text>
+            </TouchableOpacity>
+            <TouchableOpacity style={styles.snoozeButton} onPress={onRelease} disabled={busy}>
+              <Text style={styles.snoozeText}>Release</Text>
+            </TouchableOpacity>
+          </View>
+        </View>
+      ) : null}
     </KeyboardAvoidingView>
   );
 }
@@ -1957,7 +2457,11 @@ const styles = StyleSheet.create({
   rowBetween: { flexDirection: 'row', justifyContent: 'space-between', alignItems: 'center' },
   requestNo: { color: DARK, fontSize: 16, fontWeight: '900' },
   newBadge: { paddingHorizontal: 8, paddingVertical: 4, borderRadius: 7, backgroundColor: DANGER, color: '#fff', fontSize: 9, fontWeight: '900', overflow: 'hidden' },
+  statusBadgeMuted: { backgroundColor: MUTED },
   requestFrom: { marginTop: 9, color: MUTED, fontSize: 12 },
+  requestOwner: { marginTop: 6, color: NEON_YELLOW, fontSize: 12, fontWeight: '800' },
+  requestLockNote: { marginTop: 8, color: NEON_YELLOW, fontSize: 12, fontWeight: '800', textAlign: 'center' },
+  remarkReadOnly: { marginTop: 8, color: MUTED, fontSize: 12 },
   requestMeta: { marginTop: 7, color: MUTED, fontSize: 11 },
   requestActions: { marginTop: 13, flexDirection: 'row' },
   snoozeButton: {

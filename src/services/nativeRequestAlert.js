@@ -11,9 +11,10 @@ export function toRequestAlertData(payload = {}) {
   const totalItems = payload.totalItems ?? payload.total_items ?? 0;
   const totalQuantity =
     payload.totalQuantity ?? payload.total_quantity ?? payload.total_qty ?? 0;
+  const type = String(payload.type || 'branch_request');
   return {
     ...payload,
-    type: 'branch_request',
+    type,
     screen: 'request',
     requestId,
     request_group_key: requestId || payload.request_group_key,
@@ -28,6 +29,7 @@ export function toRequestAlertData(payload = {}) {
     total_qty: totalQuantity,
     total_quantity: totalQuantity,
     round: payload.round,
+    picked_by_name: payload.pickedByName || payload.picked_by_name || '',
   };
 }
 
@@ -35,10 +37,29 @@ export function stopRinging(requestId) {
   NativeRequestAlert?.stopRinging?.(String(requestId || ''));
 }
 
-// Resolves true if this app is already exempt from Android battery
-// optimization (so background FCM delivery + ringing is reliable).
-// On unsupported platforms/native module missing, resolves true so callers
-// don't block on it.
+export function saveNativeAuth(token, baseUrl) {
+  NativeRequestAlert?.saveAuth?.(String(token || ''), String(baseUrl || ''));
+}
+
+export function clearNativeAuth() {
+  NativeRequestAlert?.clearAuth?.();
+}
+
+export function logoutCleanup() {
+  try {
+    if (NativeRequestAlert?.logoutCleanup) {
+      NativeRequestAlert.logoutCleanup();
+      return;
+    }
+  } catch (_e) {}
+  try {
+    NativeRequestAlert?.stopRinging?.('');
+  } catch (_e) {}
+  try {
+    NativeRequestAlert?.clearAuth?.();
+  } catch (_e) {}
+}
+
 export async function isIgnoringBatteryOptimizations() {
   try {
     const result = await NativeRequestAlert?.isIgnoringBatteryOptimizations?.();
@@ -48,8 +69,6 @@ export async function isIgnoringBatteryOptimizations() {
   }
 }
 
-// Opens the system "ignore battery optimizations" dialog for this app.
-// No-op if the native module is unavailable (e.g. iOS, Expo Go).
 export function requestIgnoreBatteryOptimizations() {
   NativeRequestAlert?.requestIgnoreBatteryOptimizations?.();
 }
@@ -64,4 +83,29 @@ export function addNativeSnoozeListener(listener) {
   return NativeRequestAlert?.addListener?.('onSnooze', (payload) => {
     listener(toRequestAlertData(payload || {}));
   });
+}
+
+export function addNativeIncomingAlertListener(listener) {
+  return NativeRequestAlert?.addListener?.('onIncomingAlert', (payload) => {
+    listener(toRequestAlertData(payload || {}));
+  });
+}
+
+export function addNativeRequestPickedListener(listener) {
+  return NativeRequestAlert?.addListener?.('onRequestPicked', (payload) => {
+    listener(toRequestAlertData(payload || {}));
+  });
+}
+
+export async function canUseFullScreenIntent() {
+  try {
+    const result = await NativeRequestAlert?.canUseFullScreenIntent?.();
+    return result ?? true;
+  } catch (_e) {
+    return true;
+  }
+}
+
+export function requestUseFullScreenIntent() {
+  NativeRequestAlert?.requestUseFullScreenIntent?.();
 }

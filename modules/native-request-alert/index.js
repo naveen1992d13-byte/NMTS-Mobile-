@@ -3,7 +3,7 @@ import { requireOptionalNativeModule } from 'expo-modules-core';
 const NativeRequestAlert = requireOptionalNativeModule('NativeRequestAlert');
 
 export function toRequestAlertData(payload = {}) {
-  const requestId = String(payload.requestId || payload.request_group_key || payload.requestId || '');
+  const requestId = String(payload.requestId || payload.request_group_key || '');
   const requestNumber = String(payload.requestNumber || payload.request_number || '');
   const branchName = String(
     payload.branchName || payload.requesting_branch || payload.requested_branch || ''
@@ -13,7 +13,7 @@ export function toRequestAlertData(payload = {}) {
     payload.totalQuantity ?? payload.total_quantity ?? payload.total_qty ?? 0;
   return {
     ...payload,
-    type: 'branch_request',
+    type: payload.type || 'branch_request',
     screen: 'request',
     requestId,
     request_group_key: requestId || payload.request_group_key,

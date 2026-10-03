@@ -1,5 +1,6 @@
 package `in`.sleepingstock.mobile.requestalert
 
+import android.app.NotificationManager
 import android.content.Context
 import android.content.Intent
 import android.net.Uri
@@ -14,10 +15,39 @@ import java.lang.ref.WeakReference
 class RequestAlertModule : Module() {
   override fun definition() = ModuleDefinition {
     Name("NativeRequestAlert")
-    Events("onPick", "onSnooze")
+    Events("onPick", "onSnooze", "onIncomingAlert", "onRequestPicked")
 
     OnCreate {
       instance = WeakReference(this@RequestAlertModule)
+      val context = appContext.reactContext ?: appContext.currentActivity
+      if (context != null) {
+        if (RequestAlertStore.sessionToken(context).isBlank()) {
+          RequestAlertStore.clearActiveAlert(context)
+        } else {
+          val persisted = RequestAlertStore.loadActiveAlert(context)
+          if (persisted != null && (persisted.requestId.isNotBlank() || persisted.requestNumber.isNotBlank())) {
+            RequestAlertLog.i("restoring persisted alert")
+            RequestAlertRingingService.startNow(context, persisted)
+          }
+        }
+      }
+    }
+
+    Function("saveAuth") { token: String, baseUrl: String ->
+      val context = appContext.reactContext ?: appContext.currentActivity ?: return@Function Unit
+      RequestAlertStore.saveAuth(context, token, baseUrl)
+    }
+
+    Function("clearAuth") {
+      val context = appContext.reactContext ?: appContext.currentActivity ?: return@Function Unit
+      RequestAlertStore.clearAuth(context)
+    }
+
+    Function("logoutCleanup") {
+      val context = appContext.reactContext ?: appContext.currentActivity ?: return@Function Unit
+      RequestAlertStore.clearAuth(context)
+      RequestAlertStore.clearActiveAlert(context)
+      RequestAlertRingingService.stop(context, null)
     }
 
     OnDestroy {
@@ -31,7 +61,8 @@ class RequestAlertModule : Module() {
     }
 
     Function("stopRinging") { requestId: String? ->
-      val context = appContext.reactContext ?: appContext.currentActivity ?: return@Function
+      val context = appContext.reactContext ?: appContext.currentActivity ?: return@Function Unit
+      RequestAlertLockFlags.clear(appContext.currentActivity)
       RequestAlertRingingService.stop(context, requestId)
     }
 
@@ -74,6 +105,38 @@ class RequestAlertModule : Module() {
         }
       }
     }
+
+    // Android 14+ (API 34): full-screen intents require an explicit user grant.
+    // Below API 34 the OS does not expose this setting — treat as granted.
+    Function("canUseFullScreenIntent") {
+      val context = appContext.reactContext ?: appContext.currentActivity ?: return@Function true
+      if (Build.VERSION.SDK_INT < 34) return@Function true
+      val nm = context.getSystemService(Context.NOTIFICATION_SERVICE) as? NotificationManager
+      return@Function nm?.canUseFullScreenIntent() ?: true
+    }
+
+    Function("requestUseFullScreenIntent") {
+      val context = appContext.reactContext ?: appContext.currentActivity ?: return@Function Unit
+      if (Build.VERSION.SDK_INT < 34) return@Function Unit
+      val nm = context.getSystemService(Context.NOTIFICATION_SERVICE) as? NotificationManager
+      if (nm?.canUseFullScreenIntent() == true) return@Function Unit
+      try {
+        val intent = Intent(Settings.ACTION_MANAGE_APP_USE_FULL_SCREEN_INTENT).apply {
+          data = Uri.parse("package:${context.packageName}")
+          addFlags(Intent.FLAG_ACTIVITY_NEW_TASK)
+        }
+        context.startActivity(intent)
+      } catch (_: Throwable) {
+        try {
+          val fallback = Intent(Settings.ACTION_APP_NOTIFICATION_SETTINGS).apply {
+            putExtra(Settings.EXTRA_APP_PACKAGE, context.packageName)
+            addFlags(Intent.FLAG_ACTIVITY_NEW_TASK)
+          }
+          context.startActivity(fallback)
+        } catch (_: Throwable) {
+        }
+      }
+    }
   }
 
   private fun emitMap(event: String, payload: RequestAlertPayload) {
@@ -90,17 +153,30 @@ class RequestAlertModule : Module() {
 
     fun emitSnooze(payload: RequestAlertPayload) = emitOrQueue("onSnooze", payload)
 
+    fun emitIncoming(payload: RequestAlertPayload) = emitOrQueue("onIncomingAlert", payload)
+
+    fun emitPicked(payload: RequestAlertPayload) = emitOrQueue("onRequestPicked", payload)
+
     private fun emitOrQueue(event: String, payload: RequestAlertPayload) {
       val module = instance?.get()
       if (module != null) {
         try {
           module.emitMap(event, payload)
           pendingEvent = null
+          if (event == "onIncomingAlert") {
+            RequestAlertLog.i("onIncomingAlert native event emission sent")
+          }
           return
-        } catch (_: Throwable) {
+        } catch (error: Throwable) {
+          if (event == "onIncomingAlert") {
+            RequestAlertLog.e("onIncomingAlert native event emission failed", error)
+          }
         }
       }
       pendingEvent = event to payload
+      if (event == "onIncomingAlert") {
+        RequestAlertLog.i("onIncomingAlert native event emission queued")
+      }
     }
   }
 
