@@ -154,7 +154,7 @@ if (read('src/services/nativeRequestAlert.js').includes('stopRinging') && app.in
 if (app.includes('stopRinging(group.request_group_key') && app.includes('stopRinging(alert.request_group_key')) {
   pass('existing Pick/Snooze handlers call stopRinging');
 } else fail('Pick/Snooze handlers missing stopRinging');
-if (expo.version === '1.4.2' && expo.android.versionCode === 24) pass('APK versionCode is 24');
+if (expo.version === '1.4.3' && expo.android.versionCode === 25) pass('APK versionCode is 25');
 else fail('android versionCode/version not bumped');
 if (fcm.includes('sessionToken') && fcm.includes('skip no session') && ringing.includes('skip no session')) {
   pass('native FCM and ringing refuse start without session token');
