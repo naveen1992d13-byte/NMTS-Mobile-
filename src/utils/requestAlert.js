@@ -104,13 +104,34 @@ export function formatSlaRemaining(deadlineOrSeconds, nowMs = Date.now()) {
 }
 
 export function findRequestGroup(rows, data) {
-  const key = String(data?.request_group_key || '').trim();
-  const number = String(data?.request_number || '').trim();
+  const key = String(data?.request_group_key || data?.requestId || data?.request_id || '').trim();
+  const number = String(data?.request_number || data?.requestNumber || '').trim();
   return (rows || []).find((row) => {
     const rowKey = String(row?.request_group_key || '').trim();
+    const rowId = String(row?.request_group_id || '').trim();
     const rowNumber = String(row?.request_number || '').trim();
-    return (key && (rowKey === key || rowNumber === key)) || (number && (rowNumber === number || rowKey === number));
+    return (
+      (key && (rowKey === key || rowId === key || rowNumber === key)) ||
+      (number && (rowNumber === number || rowKey === number || rowId === number))
+    );
   }) || null;
+}
+
+export function asOwnedPickedRequest(row, extra = {}) {
+  const base = row && typeof row === 'object' ? row : {};
+  return {
+    ...base,
+    ...extra,
+    status: 'picked',
+    status_label: 'PICKED',
+    accepted_by_me: true,
+    accepted_by_another: false,
+    can_edit: true,
+    can_pick: false,
+    can_snooze: false,
+    can_transfer: true,
+    can_release: true,
+  };
 }
 
 export function buildIncomingAlert(data, session, group) {

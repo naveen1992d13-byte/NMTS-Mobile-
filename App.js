@@ -93,7 +93,7 @@ import StockAvailabilityScreen from './src/components/StockAvailabilityScreen';
 import MultiPartSearchScreen from './src/components/MultiPartSearchScreen';
 import MandatoryUpdateScreen from './src/components/MandatoryUpdateScreen';
 import IncomingRequestPopup from './src/components/IncomingRequestPopup';
-import { buildIncomingAlert, canCompleteRequest, canEditRequest, canPickRequest, canReleaseRequest, canSnoozeRequest, canTransferRequest, findRequestGroup, formatSlaRemaining, isBranchRequest, isRequestPickedPush, isRequestTransferredPush, ownerName, requestStatus, resolveNotificationData, statusLabelFor } from './src/utils/requestAlert';
+import { asOwnedPickedRequest, buildIncomingAlert, canCompleteRequest, canEditRequest, canPickRequest, canReleaseRequest, canSnoozeRequest, canTransferRequest, findRequestGroup, formatSlaRemaining, isBranchRequest, isRequestPickedPush, isRequestTransferredPush, ownerName, requestStatus, resolveNotificationData, statusLabelFor } from './src/utils/requestAlert';
 import {
   Empty,
   Field,
@@ -488,7 +488,7 @@ export default function App() {
     if (group && (group.accepted_by_me || data?.type === 'request_transferred') && openRequestRef.current) {
       incomingAlertRef.current = null;
       setIncomingAlert(null);
-      openRequestRef.current(group);
+      openRequestRef.current(data?.type === 'request_transferred' ? group : asOwnedPickedRequest(group));
       return;
     }
     if (group && pickRequestRef.current) {
@@ -747,15 +747,18 @@ export default function App() {
 
   useEffect(() => {
     if (!selectedRequest?.request_group_key) return;
-    const next = notifications.find((row) => row.request_group_key === selectedRequest.request_group_key);
+    const next = findRequestGroup(notifications, selectedRequest);
     if (!next) return;
+    if (selectedRequest.accepted_by_me && requestStatus(selectedRequest) === 'picked' && !next.accepted_by_me && requestStatus(next) === 'pending') {
+      return;
+    }
     if (
       next.status !== selectedRequest.status ||
       next.picked_by_name !== selectedRequest.picked_by_name ||
       next.accepted_by_me !== selectedRequest.accepted_by_me ||
       next.rejection_reason !== selectedRequest.rejection_reason
     ) {
-      setSelectedRequest(next);
+      setSelectedRequest(next.accepted_by_me && requestStatus(next) === 'picked' ? asOwnedPickedRequest(next) : next);
       if (!canEditRequest(next) && canEditRequest(selectedRequest)) {
         setRequestRows(
           (next.parts || []).map((part) => ({
@@ -1258,7 +1261,7 @@ export default function App() {
       const rows = await getNotifications().catch(() => notificationsRef.current || []);
       setNotifications(rows || []);
       notificationsRef.current = rows || [];
-      const next = findRequestGroup(rows, group) || { ...group, status: 'picked', accepted_by_me: true, can_edit: true };
+      const next = asOwnedPickedRequest(findRequestGroup(rows, group) || group);
       openRequest(next);
     } catch (error) {
       const name = error?.data?.detail?.picked_by_name;

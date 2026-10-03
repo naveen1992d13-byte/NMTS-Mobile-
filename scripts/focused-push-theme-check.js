@@ -154,8 +154,11 @@ if (read('src/services/nativeRequestAlert.js').includes('stopRinging') && app.in
 if (app.includes('stopRinging(group.request_group_key') && app.includes('stopRinging(alert.request_group_key')) {
   pass('existing Pick/Snooze handlers call stopRinging');
 } else fail('Pick/Snooze handlers missing stopRinging');
-if (expo.version === '1.4.3' && expo.android.versionCode === 25) pass('APK versionCode is 25');
+if (expo.version === '1.4.4' && expo.android.versionCode === 26) pass('APK versionCode is 26');
 else fail('android versionCode/version not bumped');
+if (app.includes('asOwnedPickedRequest(') && requestAlert.includes('export function asOwnedPickedRequest')) {
+  pass('post-Pick selected request is forced to owned/editable');
+} else fail('post-Pick owned refresh helper missing');
 if (fcm.includes('sessionToken') && fcm.includes('skip no session') && ringing.includes('skip no session')) {
   pass('native FCM and ringing refuse start without session token');
 } else fail('native session-token ring guard missing');
