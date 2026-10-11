@@ -154,7 +154,7 @@ if (read('src/services/nativeRequestAlert.js').includes('stopRinging') && app.in
 if (app.includes('stopRinging(group.request_group_key') && app.includes('stopRinging(alert.request_group_key')) {
   pass('existing Pick/Snooze handlers call stopRinging');
 } else fail('Pick/Snooze handlers missing stopRinging');
-if (expo.version === '1.4.4' && expo.android.versionCode === 26) pass('APK versionCode is 26');
+if (expo.version === '1.4.5' && expo.android.versionCode === 27) pass('APK version is 1.4.5 / versionCode 27');
 else fail('android versionCode/version not bumped');
 if (app.includes('asOwnedPickedRequest(') && requestAlert.includes('export function asOwnedPickedRequest')) {
   pass('post-Pick selected request is forced to owned/editable');
@@ -223,6 +223,59 @@ else fail('icon/splash not wired');
 
 if (read('src/theme.js').includes('#05070d') && read('src/theme.js').includes('3ee0ff')) pass('dark neon theme tokens present');
 else fail('theme tokens missing');
+
+const envJs = read('src/config/env.js');
+if (
+  envJs.includes("https://testing.sleepingstock.in/api") &&
+  envJs.includes("https://api.sleepingstock.in/api") &&
+  envJs.includes('ALLOWED_API_BASE_URLS') &&
+  envJs.includes('MANUAL_PAIRING_API_BASE_URL = PRODUCTION_API_BASE_URL') &&
+  !envJs.includes('PAIRING_SERVER_PRESETS')
+) pass('only official Testing/Production API URLs are allowed; manual OTP uses Production');
+else fail('pairing environment allowlist / manual Production URL missing');
+
+const sessionJs = read('src/services/session.js');
+if (
+  sessionJs.includes("Your branch has been transferred. Please re-pair your device to continue.") &&
+  sessionJs.includes('BRANCH_TRANSFERRED_MESSAGE') &&
+  sessionJs.includes('setBranchTransferredFlag') &&
+  read('src/api.js').includes('isBranchTransferredError') &&
+  app.includes('handleBranchTransferred') &&
+  app.includes('clearOldBranchCache') &&
+  app.includes('BRANCH_TRANSFERRED_MESSAGE') &&
+  sessionJs.includes("type === 'branch_transferred'")
+) pass('branch transfer invalidates session and requires manual re-pairing');
+else fail('branch transfer logout / re-pair flow missing');
+
+if (
+  app.includes("require('./assets/login-background.png')") &&
+  app.includes('resizeMode="cover"') &&
+  app.includes('blurRadius={18}') &&
+  app.includes("backgroundColor: 'rgba(5,7,6,0.70)'") &&
+  app.includes("require('./assets/sleeping-stock-logo.png')") &&
+  exists('assets/login-background.png')
+) pass('login background used only on pairing screen with cover crop and 70% dim');
+else fail('login/pairing background crop/dim missing');
+
+if (
+  expo.icon === './assets/icon.png' &&
+  expo.android.adaptiveIcon?.foregroundImage === './assets/adaptive-icon.png' &&
+  expo.splash?.image === './assets/splash-logo.png' &&
+  exists('assets/sleeping-stock-logo.png') &&
+  exists('assets/splash-logo.png')
+) pass('launcher icon updated; existing in-app/splash logos unchanged');
+else fail('icon/logo wiring incorrect');
+
+const officialUploadedIcon = '/home/ec2-user/.cursor/projects/home-ec2-user-sleeping-stock-web/assets/1e5af237-7973-41dc-824f-04731d07c642.png';
+if (fs.existsSync(officialUploadedIcon) && sha('assets/icon.png') === crypto.createHash('sha256').update(fs.readFileSync(officialUploadedIcon)).digest('hex')) {
+  pass('uploaded launcher icon applied as app icon');
+} else if (!fs.existsSync(officialUploadedIcon)) {
+  pass('skip uploaded icon hash (source asset not on this machine)');
+} else fail('app icon does not match the uploaded launcher icon');
+
+if (!app.includes('PAIRING_SERVER_PRESETS') && !app.includes('Custom HTTPS URL')) {
+  pass('manual pairing has no environment selector or custom URL field');
+} else fail('manual pairing still exposes an environment selector');
 
 const gsKey = gs.client?.[0]?.api_key?.[0]?.current_key || '';
 if (gsKey === 'REPLACE_WITH_FIREBASE_ANDROID_API_KEY' || gsKey.includes('REPLACE') || !gsKey) {

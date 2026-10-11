@@ -2,7 +2,7 @@
   "expo": {
     "name": "Sleeping Stock Mobile",
     "slug": "sleeping-stock-mobile",
-    "version": "1.4.4",
+    "version": "1.4.5",
     "orientation": "portrait",
     "userInterfaceStyle": "dark",
     "newArchEnabled": true,
@@ -14,7 +14,7 @@
     },
     "android": {
       "package": "in.sleepingstock.mobile",
-      "versionCode": 26,
+      "versionCode": 27,
       "googleServicesFile": "./google-services.json",
       "permissions": [
         "CAMERA",

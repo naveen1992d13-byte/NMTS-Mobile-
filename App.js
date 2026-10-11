@@ -27,7 +27,15 @@ import * as Device from 'expo-device';
 import Constants from 'expo-constants';
 import NetInfo from '@react-native-community/netinfo';
 
-import { getSession, saveSession, clearSession } from './src/services/session';
+import {
+  getSession,
+  saveSession,
+  clearSession,
+  getBranchTransferredFlag,
+  setBranchTransferredFlag,
+  isBranchTransferredPayload,
+  BRANCH_TRANSFERRED_MESSAGE,
+} from './src/services/session';
 import {
   ApiError,
   setOnSessionInvalidated,
@@ -50,8 +58,9 @@ import {
   getLatestAppVersion,
   getAutoPerpetualTasks,
   getAutoPerpetualSessionToday,
+  isBranchTransferredError,
 } from './src/api';
-import { PAIRING_SERVER_PRESETS, normalizeApiBaseUrl } from './src/config/env';
+import { MANUAL_PAIRING_API_BASE_URL, normalizeApiBaseUrl } from './src/config/env';
 import {
   initOfflineQueue,
   enqueueAndTrySync,
@@ -60,6 +69,7 @@ import {
   subscribeToSyncStatus,
   startAutoSync,
   syncQueue,
+  clearQueuedRecords,
 } from './src/services/offlineQueue';
 import {
   dismissBranchRequestNotifications,
@@ -177,8 +187,8 @@ export default function App() {
   const [pairingCode, setPairingCode] = useState('');
   const [pairingBusy, setPairingBusy] = useState(false);
   const [pairingScanned, setPairingScanned] = useState(false);
-  const [manualServerUrl, setManualServerUrl] = useState(PAIRING_SERVER_PRESETS[0].url);
   const [showManualPairing, setShowManualPairing] = useState(false);
+  const [branchTransferred, setBranchTransferred] = useState(false);
 
   const [notifications, setNotifications] = useState([]);
   const [notificationsBusy, setNotificationsBusy] = useState(false);
@@ -237,10 +247,59 @@ export default function App() {
   const fsiOnboardingRef = useRef({ initialShown: false, returnChecked: false });
   const openRequestRef = useRef(null);
   const pickRequestRef = useRef(null);
+  const transferAlertedRef = useRef(false);
+  const handleBranchTransferredRef = useRef(null);
 
   useEffect(() => {
     screenRef.current = screen;
   }, [screen]);
+
+  const clearOldBranchCache = useCallback(async () => {
+    try { await clearQueuedRecords(); } catch (_e) {}
+    incomingAlertRef.current = null;
+    incomingShownKeyRef.current = null;
+    incomingNotificationRef.current = null;
+    notificationsRef.current = [];
+    setIncomingAlert(null);
+    setNotifications([]);
+    setSelectedRequest(null);
+    setRequestRows([]);
+    setVerificationList([]);
+    setSelectedPart(null);
+    setSearchResults([]);
+    setSearchNotFound([]);
+    setSearchInput('');
+    setMultiResults([]);
+    setMultiNotFound([]);
+    setMultiInput('');
+    setAutoTasks([]);
+    setAutoSessionId('');
+    setAutoLocalVerified({});
+    setPendingCount(0);
+    setMandatoryUpdate(null);
+  }, []);
+
+  const handleBranchTransferred = useCallback(async () => {
+    stopRinging();
+    await stopRequestRingtone();
+    await dismissBranchRequestNotifications();
+    logoutCleanup();
+    clearApiAuthCache();
+    await clearSession();
+    await setBranchTransferredFlag(true);
+    await clearOldBranchCache();
+    setSession(null);
+    setBranchTransferred(true);
+    setScreen('pair');
+    if (!transferAlertedRef.current) {
+      transferAlertedRef.current = true;
+      Alert.alert('Branch Transferred', BRANCH_TRANSFERRED_MESSAGE);
+    }
+  }, [clearOldBranchCache]);
+
+  useEffect(() => {
+    handleBranchTransferredRef.current = handleBranchTransferred;
+  }, [handleBranchTransferred]);
 
   useEffect(() => {
     let mounted = true;
@@ -258,7 +317,11 @@ export default function App() {
       if (mounted) setIsOffline(!(state.isConnected && state.isInternetReachable !== false));
     });
 
-    setOnSessionInvalidated(async () => {
+    setOnSessionInvalidated(async (error) => {
+      if (isBranchTransferredError(error) || isBranchTransferredPayload(error?.data)) {
+        await handleBranchTransferredRef.current?.();
+        return;
+      }
       stopRinging();
       await stopRequestRingtone();
       await dismissBranchRequestNotifications();
@@ -293,6 +356,11 @@ export default function App() {
       } catch (_e) {}
 
       try {
+        const transferred = await getBranchTransferredFlag();
+        if (transferred) {
+          await handleBranchTransferredRef.current?.();
+          return;
+        }
         const saved = await getSession();
         if (saved) {
           setSession(saved);
@@ -422,6 +490,10 @@ export default function App() {
 
   const showIncomingFromPush = useCallback(async (data, notification) => {
     const payload = resolveNotificationData(data);
+    if (isBranchTransferredPayload(payload) || isBranchTransferredPayload(data)) {
+      handleBranchTransferredRef.current?.();
+      return;
+    }
     if (isRequestPickedPush(payload)) {
       const key = payload.request_group_key || payload.requestId || payload.request_number;
       stopRinging(key);
@@ -589,6 +661,10 @@ export default function App() {
     initPushNotifications({
       deviceId: session.deviceId,
       onNotificationReceived: (data, notification) => {
+        if (isBranchTransferredPayload(data) || isBranchTransferredPayload(resolveNotificationData(data))) {
+          handleBranchTransferredRef.current?.();
+          return;
+        }
         if (data?.type === 'auto_perpetual') loadAutoTasksRef.current?.();
         if (isBranchRequest(data)) {
           const key = data.request_group_key || data.requestId || data.request_number;
@@ -607,6 +683,10 @@ export default function App() {
         if (screenRef.current === 'notifications') loadNotificationsRef.current?.();
       },
       onNotificationTapped: (data) => {
+        if (isBranchTransferredPayload(data) || isBranchTransferredPayload(resolveNotificationData(data))) {
+          handleBranchTransferredRef.current?.();
+          return;
+        }
         if (data?.type === 'auto_perpetual') {
           loadAutoTasksRef.current?.()?.finally?.(() => setScreen('auto'));
           return;
@@ -830,6 +910,9 @@ export default function App() {
       };
       clearApiAuthCache();
       await saveSession(nextSession);
+      await setBranchTransferredFlag(false);
+      transferAlertedRef.current = false;
+      setBranchTransferred(false);
       setSession(nextSession);
       setPairingScanned(false);
       setScreen('home');
@@ -846,7 +929,7 @@ export default function App() {
     setPairingScanned(true);
     try {
       const parsed = JSON.parse(String(data || ''));
-      const apiBaseUrl = parsed?.api_base_url || parsed?.apiBaseUrl;
+      const apiBaseUrl = normalizeApiBaseUrl(parsed?.api_base_url || parsed?.apiBaseUrl);
       const pairingType = String(parsed?.pairing_type || (parsed?.mobile_user_id ? 'REPAIR' : 'NEW')).toUpperCase();
       const valid =
         parsed?.issuer === 'NMTS_SLEEPING_STOCK_PAIRING' &&
@@ -874,14 +957,19 @@ export default function App() {
                 qrMobileUserId: detectedId,
                 pairingType,
                 qrPairingCode: String(parsed.pairing_code),
-                apiBaseUrl: String(apiBaseUrl),
+                apiBaseUrl,
                 pairingToken: String(parsed.pairing_token),
               }),
           },
         ]
       );
-    } catch (_error) {
-      Alert.alert('Invalid QR Code', 'Scan only the pairing QR code generated from the NMTS website.');
+    } catch (error) {
+      Alert.alert(
+        'Invalid QR Code',
+        error?.message && /not allowed|HTTPS|invalid|not configured/i.test(error.message)
+          ? error.message
+          : 'Scan only the pairing QR code generated from the NMTS website.'
+      );
       setPairingScanned(false);
     }
   };
@@ -902,7 +990,21 @@ export default function App() {
     setScreen('pair');
   };
 
+  const navigateGuarded = (next) => {
+    if (branchTransferred || !sessionRef.current) {
+      setScreen('pair');
+      if (branchTransferred) Alert.alert('Branch Transferred', BRANCH_TRANSFERRED_MESSAGE);
+      return;
+    }
+    setScreen(next);
+  };
+
   const openScanner = async (target) => {
+    if (branchTransferred && target !== 'pairing') {
+      setScreen('pair');
+      Alert.alert('Branch Transferred', BRANCH_TRANSFERRED_MESSAGE);
+      return;
+    }
     if (!permission?.granted) {
       const result = await requestPermission();
       if (!result.granted) {
@@ -1480,12 +1582,11 @@ export default function App() {
 
   const pairManually = async () => {
     try {
-      const apiBaseUrl = normalizeApiBaseUrl(manualServerUrl);
       await pairDevice({
         qrMobileUserId: mobileUserId.trim().toUpperCase() || null,
         pairingType: mobileUserId.trim() ? 'REPAIR' : 'NEW',
         qrPairingCode: pairingCode.trim().toUpperCase(),
-        apiBaseUrl,
+        apiBaseUrl: MANUAL_PAIRING_API_BASE_URL,
         pairingToken: null,
       });
     } catch (error) {
@@ -1542,11 +1643,10 @@ export default function App() {
           setMobileNumber={setMobileNumber}
           pairingCode={pairingCode}
           setPairingCode={setPairingCode}
-          manualServerUrl={manualServerUrl}
-          setManualServerUrl={setManualServerUrl}
           showManual={showManualPairing}
           setShowManual={setShowManualPairing}
           busy={pairingBusy}
+          branchTransferred={branchTransferred}
           onScanQr={() => openScanner('pairing')}
           onManualPair={pairManually}
         />
@@ -1556,7 +1656,7 @@ export default function App() {
             session={session}
             pendingCount={pendingCount}
             notificationCount={notifications.filter((row) => requestStatus(row) === 'pending').length}
-            navigate={setScreen}
+            navigate={navigateGuarded}
             logout={logout}
           />
       )}
@@ -1690,68 +1790,67 @@ export default function App() {
 
 function PairScreen(props) {
   return (
-    <KeyboardAvoidingView
-      style={styles.flex}
-      behavior={Platform.OS === 'ios' ? 'padding' : 'height'}
-      keyboardVerticalOffset={Platform.OS === 'ios' ? 0 : 18}
-    >
-      <ScrollView contentContainerStyle={styles.pairPage} keyboardShouldPersistTaps="handled" keyboardDismissMode="interactive">
-        <Image source={require('./assets/sleeping-stock-logo.png')} style={styles.brandLogo} resizeMode="contain" />
-        <Text style={styles.appTitle}>Sleeping Stock Mobile</Text>
-        <Text style={styles.appSub}>PAIR THIS DEVICE</Text>
-        <View style={styles.card}>
-          <Field label="Your Name" value={props.userName} onChangeText={props.setUserName} />
-          <Field
-            label="Mobile Number"
-            value={props.mobileNumber}
-            onChangeText={props.setMobileNumber}
-            keyboardType="phone-pad"
-          />
-          <Text style={styles.qrInfo}>
-            The NMTS website QR contains a one-time pairing code and secure server URL. A new Mobile User ID is created after
-            first pairing; Re-pair keeps the same ID.
-          </Text>
-          <PrimaryButton title="Scan NMTS Pairing QR" onPress={props.onScanQr} busy={props.busy} />
-          <TouchableOpacity style={{ marginTop: 14 }} onPress={() => props.setShowManual(!props.showManual)}>
-            <Text style={styles.pendingAction}>Enter Code Manually</Text>
-          </TouchableOpacity>
-          {props.showManual ? (
-            <View style={{ marginTop: 14 }}>
-              <Field
-                label="Website pairing code"
-                value={props.pairingCode}
-                onChangeText={(value) => props.setPairingCode(String(value || '').toUpperCase())}
-                autoCapitalize="characters"
-              />
-              <Field
-                label="Re-pair Mobile User ID (optional)"
-                value={props.mobileUserId}
-                onChangeText={(value) => props.setMobileUserId(String(value || '').toUpperCase())}
-                autoCapitalize="characters"
-              />
-              <Text style={styles.qrInfo}>HTTPS server URL</Text>
-              {PAIRING_SERVER_PRESETS.map((preset) => (
-                <TouchableOpacity
-                  key={preset.url}
-                  style={[styles.snoozeButton, props.manualServerUrl === preset.url && { borderColor: BLUE }]}
-                  onPress={() => props.setManualServerUrl(preset.url)}
-                >
-                  <Text style={styles.snoozeText}>{preset.label}</Text>
-                </TouchableOpacity>
-              ))}
-              <Field
-                label="Custom HTTPS URL"
-                value={props.manualServerUrl}
-                onChangeText={props.setManualServerUrl}
-                autoCapitalize="none"
-              />
-              <PrimaryButton title="Pair with Code" onPress={props.onManualPair} busy={props.busy} />
+    <View style={styles.flex}>
+      <Image
+        source={require('./assets/login-background.png')}
+        style={styles.loginBackground}
+        resizeMode="cover"
+        blurRadius={18}
+      />
+      <View style={styles.loginDim} />
+      <KeyboardAvoidingView
+        style={styles.flex}
+        behavior={Platform.OS === 'ios' ? 'padding' : 'height'}
+        keyboardVerticalOffset={Platform.OS === 'ios' ? 0 : 18}
+      >
+        <ScrollView contentContainerStyle={styles.pairPage} keyboardShouldPersistTaps="handled" keyboardDismissMode="interactive">
+          <Image source={require('./assets/sleeping-stock-logo.png')} style={styles.brandLogo} resizeMode="contain" />
+          <Text style={styles.appTitle}>Sleeping Stock Mobile</Text>
+          <Text style={styles.appSub}>PAIR THIS DEVICE</Text>
+          {props.branchTransferred ? (
+            <View style={styles.transferBanner}>
+              <Text style={styles.transferBannerTitle}>BRANCH TRANSFERRED</Text>
+              <Text style={styles.transferBannerText}>{BRANCH_TRANSFERRED_MESSAGE}</Text>
             </View>
           ) : null}
-          {!!props.mobileUserId && !props.showManual && <Text style={styles.detectedUser}>Detected User: {props.mobileUserId}</Text>}
-        </View>
-      </ScrollView>
-    </KeyboardAvoidingView>
+          <View style={styles.card}>
+            <Field label="Your Name" value={props.userName} onChangeText={props.setUserName} />
+            <Field
+              label="Mobile Number"
+              value={props.mobileNumber}
+              onChangeText={props.setMobileNumber}
+              keyboardType="phone-pad"
+            />
+            <Text style={styles.qrInfo}>
+              The NMTS website QR contains a one-time pairing code and secure server URL. A new Mobile User ID is created after
+              first pairing; Re-pair keeps the same ID. Manual pairing code always uses Production.
+            </Text>
+            <PrimaryButton title="Scan NMTS Pairing QR" onPress={props.onScanQr} busy={props.busy} />
+            <TouchableOpacity style={{ marginTop: 14 }} onPress={() => props.setShowManual(!props.showManual)}>
+              <Text style={styles.pendingAction}>Enter Code Manually</Text>
+            </TouchableOpacity>
+            {props.showManual ? (
+              <View style={{ marginTop: 14 }}>
+                <Field
+                  label="Website pairing code"
+                  value={props.pairingCode}
+                  onChangeText={(value) => props.setPairingCode(String(value || '').toUpperCase())}
+                  autoCapitalize="characters"
+                />
+                <Field
+                  label="Re-pair Mobile User ID (optional)"
+                  value={props.mobileUserId}
+                  onChangeText={(value) => props.setMobileUserId(String(value || '').toUpperCase())}
+                  autoCapitalize="characters"
+                />
+                <PrimaryButton title="Pair with Code" onPress={props.onManualPair} busy={props.busy} />
+              </View>
+            ) : null}
+            {!!props.mobileUserId && !props.showManual && <Text style={styles.detectedUser}>Detected User: {props.mobileUserId}</Text>}
+          </View>
+        </ScrollView>
+      </KeyboardAvoidingView>
+    </View>
   );
 }
 
@@ -2292,6 +2391,18 @@ const styles = StyleSheet.create({
   offline: { backgroundColor: '#fff2c7', paddingVertical: 7, alignItems: 'center' },
   offlineText: { color: '#7b5b00', fontSize: 12, fontWeight: '700' },
   pairPage: { flexGrow: 1, justifyContent: 'center', padding: 24, paddingBottom: 56 },
+  loginBackground: { ...StyleSheet.absoluteFillObject, width: '100%', height: '100%' },
+  loginDim: { ...StyleSheet.absoluteFillObject, backgroundColor: 'rgba(5,7,6,0.70)' },
+  transferBanner: {
+    marginBottom: 16,
+    padding: 16,
+    backgroundColor: 'rgba(255, 93, 108, 0.16)',
+    borderWidth: 1,
+    borderColor: DANGER,
+    borderRadius: 16,
+  },
+  transferBannerTitle: { color: DANGER, fontSize: 12, fontWeight: '900', letterSpacing: 1.1 },
+  transferBannerText: { marginTop: 8, color: DARK, fontSize: 13, lineHeight: 19, fontWeight: '700' },
   qrInfo: { color: MUTED, fontSize: 12, lineHeight: 18, marginBottom: 16 },
   detectedUser: { marginTop: 12, color: SUCCESS, fontSize: 12, fontWeight: '800', textAlign: 'center' },
   brandLogo: { alignSelf: 'center', width: 190, height: 190 },
