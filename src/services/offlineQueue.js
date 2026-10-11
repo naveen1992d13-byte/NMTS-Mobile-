@@ -155,6 +155,12 @@ export async function getPendingCount() {
   return row?.count || 0;
 }
 
+export async function clearQueuedRecords() {
+  const db = await getDb();
+  await db.execAsync(`DELETE FROM verification_queue`);
+  notifyListeners();
+}
+
 function rowToPayload(row) {
   return {
     partNumber: row.part_number,

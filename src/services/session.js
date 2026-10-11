@@ -2,7 +2,10 @@ import * as SecureStore from 'expo-secure-store';
 import { requireOptionalNativeModule } from 'expo-modules-core';
 
 const SESSION_KEY = 'sleeping_stock_mobile_session_v1';
+const BRANCH_TRANSFER_KEY = 'sleeping_stock_branch_transferred_v1';
 const NativeRequestAlert = requireOptionalNativeModule('NativeRequestAlert');
+
+export const BRANCH_TRANSFERRED_MESSAGE = 'Your branch has been transferred. Please re-pair your device to continue.';
 
 function syncNativeAuth(session) {
   try {
@@ -52,6 +55,42 @@ export async function clearSession() {
     console.log('[session] Failed to clear session', error);
     return false;
   }
+}
+
+export async function setBranchTransferredFlag(value) {
+  try {
+    if (value) {
+      await SecureStore.setItemAsync(BRANCH_TRANSFER_KEY, '1');
+    } else {
+      await SecureStore.deleteItemAsync(BRANCH_TRANSFER_KEY);
+    }
+    return true;
+  } catch (error) {
+    console.log('[session] Failed to persist branch-transfer flag', error);
+    return false;
+  }
+}
+
+export async function getBranchTransferredFlag() {
+  try {
+    return (await SecureStore.getItemAsync(BRANCH_TRANSFER_KEY)) === '1';
+  } catch (error) {
+    console.log('[session] Failed to read branch-transfer flag', error);
+    return false;
+  }
+}
+
+export function isBranchTransferredPayload(payload) {
+  if (!payload || typeof payload !== 'object') return false;
+  const detail = payload.detail && typeof payload.detail === 'object' ? payload.detail : payload;
+  const code = String(detail.code || payload.code || '').toUpperCase();
+  const type = String(detail.type || payload.type || '').toLowerCase();
+  const message = String(detail.message || payload.message || '');
+  return (
+    code === 'BRANCH_TRANSFERRED' ||
+    type === 'branch_transferred' ||
+    /branch has been transferred/i.test(message)
+  );
 }
 
 /**

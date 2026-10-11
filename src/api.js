@@ -1,7 +1,7 @@
 import axios from 'axios';
 
 import { API_BASE_URL, REQUEST_TIMEOUT_MS, normalizeApiBaseUrl } from './config/env';
-import { getSession, getSessionToken, clearSession } from './services/session';
+import { getSession, getSessionToken, clearSession, isBranchTransferredPayload } from './services/session';
 
 let onSessionInvalidated = null;
 let cachedAuth = { token: null, baseUrl: null, loadedAt: 0 };
@@ -75,7 +75,15 @@ export function errorCode(error) {
   return errorDetailObject(error)?.code || error?.data?.code || '';
 }
 
+export function isBranchTransferredError(error) {
+  if (!error) return false;
+  if (error.code === 'BRANCH_TRANSFERRED') return true;
+  if (isBranchTransferredPayload(error.data)) return true;
+  return /branch has been transferred/i.test(String(error.message || ''));
+}
+
 export function isInvalidDeviceSession(error) {
+  if (isBranchTransferredError(error)) return true;
   const status = error?.status || error?.response?.status || 0;
   if (status === 401) return true;
   if (status !== 403) return false;
