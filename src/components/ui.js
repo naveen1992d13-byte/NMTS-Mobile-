@@ -76,7 +76,7 @@ export function Empty({ text }) {
 
 export function StatusPill({ value }) {
   const color =
-    value === 'MATCHED' || value === 'ACCEPTED' || value === 'VERIFIED'
+    value === 'MATCHED' || value === 'ACCEPTED' || value === 'VERIFIED' || value === 'COMPLETED' || value === 'TODAY'
       ? SUCCESS
       : value === 'UNCONFIRMED'
         ? MUTED

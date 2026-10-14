@@ -2,7 +2,7 @@
   "expo": {
     "name": "Sleeping Stock Mobile",
     "slug": "sleeping-stock-mobile",
-    "version": "1.4.6",
+    "version": "1.4.7",
     "orientation": "portrait",
     "userInterfaceStyle": "dark",
     "newArchEnabled": true,
@@ -14,7 +14,7 @@
     },
     "android": {
       "package": "in.sleepingstock.mobile",
-      "versionCode": 28,
+      "versionCode": 29,
       "googleServicesFile": "./google-services.json",
       "icon": "./assets/source/sleeping-stock-app-icon-safe-zone.png",
       "permissions": [
@@ -29,8 +29,8 @@
         "USE_FULL_SCREEN_INTENT"
       ],
       "adaptiveIcon": {
-        "foregroundImage": "./assets/adaptive-icon.png",
-        "backgroundColor": "#05070d"
+        "foregroundImage": "./assets/source/adaptive-icon-foreground.png",
+        "backgroundImage": "./assets/source/adaptive-icon-background.png"
       },
       "softwareKeyboardLayoutMode": "resize"
     },

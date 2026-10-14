@@ -35,6 +35,11 @@ assert.ok(!appJs.includes('<VoiceTypeButton') || appJs.includes('onAppend={appen
 const autoScreen = fs.readFileSync(path.join(__dirname, '..', 'src/components/AutoPerpetualScreen.js'), 'utf8');
 assert.ok(!autoScreen.includes('VoiceTypeButton'), 'Voice Type is not on Auto Perpetual');
 assert.ok(autoScreen.includes('Blind Physical Count'), 'blind count copy present');
+assert.ok(autoScreen.includes("Today's session is not created yet"), 'today-not-created copy present');
+assert.ok(autoScreen.includes('PREVIOUS SESSIONS'), 'collapsed previous session cards present');
+assert.ok(autoScreen.includes('Re-audit'), 're-audit control present');
+assert.ok(autoScreen.includes('Expired session (read-only)'), 'expired read-only copy present');
+assert.ok(!autoScreen.includes("Yesterday's session"), 'does not treat yesterday as today');
 const avail = fs.readFileSync(path.join(__dirname, '..', 'src/components/StockAvailabilityScreen.js'), 'utf8');
 assert.ok(avail.includes('VoiceTypeButton'), 'parts search has Voice Type');
 assert.ok(avail.includes('onAppend={appendVoice}'), 'parts search appends without search');

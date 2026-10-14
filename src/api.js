@@ -242,8 +242,14 @@ export const submitStockVerificationBatch = (items) => request('post', '/mobile/
   timeout: Math.max(REQUEST_TIMEOUT_MS, 45000),
 });
 
-export const getAutoPerpetualTasks = () => request('get', '/mobile/auto-perpetual/tasks');
+export const getAutoPerpetualTasks = (params = {}) => request('get', '/mobile/auto-perpetual/tasks', {
+  params: {
+    ...(params.sessionId ? { session_id: params.sessionId } : {}),
+    ...(params.mode ? { mode: params.mode } : {}),
+  },
+});
 export const getAutoPerpetualSessionToday = () => request('get', '/mobile/auto-perpetual/session/today');
+export const getAutoPerpetualSessions = () => request('get', '/mobile/auto-perpetual/sessions');
 export const saveAutoCount = ({
   partNumber,
   physicalQty,
@@ -253,6 +259,7 @@ export const saveAutoCount = ({
   correctionReason,
   clientId,
   entryMethod = 'MANUAL',
+  sessionId,
 }) => request('post', '/mobile/auto-perpetual/count', {
   data: {
     part_number: partNumber,
@@ -263,11 +270,13 @@ export const saveAutoCount = ({
     correction_reason: correctionReason || undefined,
     client_id: clientId || undefined,
     entry_method: entryMethod,
+    session_id: sessionId || undefined,
   },
 });
-export const finalizeAutoCounts = (partNumbers = []) => request('post', '/mobile/auto-perpetual/finalize', {
+export const finalizeAutoCounts = (partNumbers = [], sessionId) => request('post', '/mobile/auto-perpetual/finalize', {
   data: {
     part_numbers: partNumbers,
+    session_id: sessionId || undefined,
   },
 });
 export const getStockVerificationHistory = (options = {}) => request('get', '/mobile/stock-verification/history', {

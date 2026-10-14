@@ -58,6 +58,7 @@ import {
   getLatestAppVersion,
   getAutoPerpetualTasks,
   getAutoPerpetualSessionToday,
+  getAutoPerpetualSessions,
   saveAutoCount,
   finalizeAutoCounts,
   isBranchTransferredError,
@@ -218,6 +219,14 @@ export default function App() {
   const [autoCompletedCount, setAutoCompletedCount] = useState(0);
   const [autoLocalVerified, setAutoLocalVerified] = useState({});
   const [autoSubmitting, setAutoSubmitting] = useState(false);
+  const [autoSessions, setAutoSessions] = useState([]);
+  const [autoToday, setAutoToday] = useState('');
+  const [autoTodayCreated, setAutoTodayCreated] = useState(false);
+  const [autoTodayMessage, setAutoTodayMessage] = useState('');
+  const [autoViewMode, setAutoViewMode] = useState('list');
+  const [autoSelectedSession, setAutoSelectedSession] = useState(null);
+  const [autoReadOnly, setAutoReadOnly] = useState(false);
+  const [autoReaudit, setAutoReaudit] = useState(false);
 
   const [searchInput, setSearchInput] = useState('');
   const [searchResults, setSearchResults] = useState([]);
@@ -389,61 +398,128 @@ export default function App() {
     };
   }, []);
 
-  const loadAutoTasks = useCallback(async () => {
+  const applyAutoTaskPayload = useCallback((data, { resetLocal = false } = {}) => {
+    const tasks = data?.tasks || [];
+    setAutoTasks(tasks);
+    if (data?.session_id) setAutoSessionId(data.session_id);
+    setAutoAssignedCount(numberValue(data?.assigned_count || tasks.length || 0));
+    setAutoCompletedCount(numberValue(data?.completed_count || 0));
+    setAutoReadOnly(Boolean(data?.read_only));
+    setAutoReaudit(Boolean(data?.reaudit));
+    setAutoLocalVerified((current) => {
+      const base = resetLocal ? {} : current;
+      const pendingParts = new Set(tasks.map((t) => cleanPartNumber(t.part_number)));
+      const next = {};
+      Object.entries(base).forEach(([part, row]) => {
+        if (pendingParts.has(part) || !row.synced) next[part] = row;
+      });
+      tasks.forEach((task) => {
+        const part = cleanPartNumber(task.part_number);
+        if (!task.count_saved) {
+          // Residual offline risk: never copy restricted qty into UI state before first Save.
+          if (next[part] && !next[part].verified) {
+            next[part] = { ...next[part], systemQty: undefined, status: '', differenceQty: 0 };
+          }
+          return;
+        }
+        next[part] = {
+          ...(next[part] || {}),
+          verified: true,
+          synced: true,
+          physicalQty: task.physical_quantity,
+          originalPhysicalQty: task.original_physical_quantity ?? next[part]?.originalPhysicalQty,
+          systemQty: task.system_qty,
+          status: String(task.quantity_status || next[part]?.status || '').toUpperCase(),
+          differenceQty: task.difference,
+          editCount: task.edit_count || next[part]?.editCount || 0,
+          editHistory: task.quantity_edit_history || next[part]?.editHistory || [],
+          finalized: Boolean(task.quantity_finalized),
+        };
+      });
+      return next;
+    });
+    return tasks;
+  }, []);
+
+  const loadAutoSessions = useCallback(async () => {
     setAutoBusy(true);
     try {
-      // Load today's authoritative session once, then reuse that ID for every
-      // verification on this screen. Backend get-or-create is idempotent per IST day.
-      const sessionResp = await getAutoPerpetualSessionToday();
-      const dailySessionId = sessionResp?.session_id || '';
-      setAutoSessionId(dailySessionId);
+      const [listResp, todayResp] = await Promise.all([
+        getAutoPerpetualSessions(),
+        getAutoPerpetualSessionToday().catch(() => null),
+      ]);
+      const today = listResp?.today || todayResp?.today || todayResp?.allocation_date || '';
+      const created = Boolean(listResp?.today_created ?? todayResp?.today_created);
+      setAutoToday(today);
+      setAutoTodayCreated(created);
+      setAutoTodayMessage(listResp?.message || todayResp?.message || (created ? '' : "Today's session is not created yet"));
+      setAutoSessions(listResp?.sessions || []);
+      if (!created) {
+        setAutoSessionId('');
+        setAutoTasks([]);
+        setAutoAssignedCount(0);
+        setAutoCompletedCount(0);
+      }
+    } catch (error) {
+      Alert.alert('Auto Perpetual', friendlyError(error));
+      setAutoSessions([]);
+      setAutoTasks([]);
+    } finally {
+      setAutoBusy(false);
+    }
+  }, []);
 
-      const data = await getAutoPerpetualTasks();
-      const tasks = data?.tasks || [];
-      setAutoTasks(tasks);
-      // Prefer the session/today ID; tasks.session_id must match after backend fix.
-      if (!dailySessionId && data?.session_id) setAutoSessionId(data.session_id);
-      setAutoAssignedCount(numberValue(data?.assigned_count || tasks.length || 0));
-      setAutoCompletedCount(numberValue(data?.completed_count || 0));
-      // Drop local entries that are no longer in today's pending list once server completed them.
-      setAutoLocalVerified((current) => {
-        const pendingParts = new Set(tasks.map((t) => cleanPartNumber(t.part_number)));
-        const next = {};
-        Object.entries(current).forEach(([part, row]) => {
-          if (pendingParts.has(part) || !row.synced) next[part] = row;
-        });
-        tasks.forEach((task) => {
-          const part = cleanPartNumber(task.part_number);
-          if (!task.count_saved) {
-            // Residual offline risk: never copy restricted qty into UI state before first Save.
-            if (next[part] && !next[part].verified) {
-              next[part] = { ...next[part], systemQty: undefined, status: '', differenceQty: 0 };
-            }
-            return;
-          }
-          next[part] = {
-            ...(next[part] || {}),
-            verified: true,
-            synced: true,
-            physicalQty: task.physical_quantity,
-            originalPhysicalQty: task.original_physical_quantity ?? next[part]?.originalPhysicalQty,
-            systemQty: task.system_qty,
-            status: String(task.quantity_status || next[part]?.status || '').toUpperCase(),
-            differenceQty: task.difference,
-            editCount: task.edit_count || next[part]?.editCount || 0,
-            editHistory: task.quantity_edit_history || next[part]?.editHistory || [],
-            finalized: Boolean(task.quantity_finalized),
-          };
-        });
-        return next;
+  const loadAutoSessionTasks = useCallback(async (session, mode = 'view', { resetLocal = false } = {}) => {
+    setAutoBusy(true);
+    try {
+      const data = await getAutoPerpetualTasks({
+        sessionId: session?.session_id,
+        mode,
       });
+      setAutoSelectedSession({
+        ...(session || {}),
+        session_id: data?.session_id || session?.session_id,
+        allocation_date: data?.allocation_date || session?.allocation_date,
+        card_status: session?.card_status,
+        is_today: Boolean(data?.is_today),
+      });
+      setAutoViewMode(mode === 'reaudit' ? 'reaudit' : 'view');
+      applyAutoTaskPayload(data, { resetLocal });
     } catch (error) {
       Alert.alert('Auto Perpetual', friendlyError(error));
       setAutoTasks([]);
     } finally {
       setAutoBusy(false);
     }
-  }, []);
+  }, [applyAutoTaskPayload]);
+
+  const loadAutoTasks = useCallback(async () => {
+    if (autoViewMode !== 'list' && autoSelectedSession?.session_id) {
+      await loadAutoSessionTasks(autoSelectedSession, autoViewMode === 'reaudit' ? 'reaudit' : 'view');
+      return;
+    }
+    setAutoViewMode('list');
+    setAutoSelectedSession(null);
+    setAutoReadOnly(false);
+    setAutoReaudit(false);
+    await loadAutoSessions();
+  }, [autoViewMode, autoSelectedSession, loadAutoSessionTasks, loadAutoSessions]);
+
+  const openAutoSession = useCallback((session, mode = 'view') => {
+    setAutoLocalVerified({});
+    loadAutoSessionTasks(session, mode, { resetLocal: true });
+  }, [loadAutoSessionTasks]);
+
+  const closeAutoSession = useCallback(() => {
+    setAutoViewMode('list');
+    setAutoSelectedSession(null);
+    setAutoReadOnly(false);
+    setAutoReaudit(false);
+    setAutoTasks([]);
+    setAutoLocalVerified({});
+    setAutoSessionId('');
+    loadAutoSessions();
+  }, [loadAutoSessions]);
 
   const loadNotifications = useCallback(async () => {
     setNotificationsBusy(true);
@@ -807,6 +883,11 @@ export default function App() {
         return true;
       }
 
+      if (screen === 'auto' && autoViewMode !== 'list') {
+        closeAutoSession();
+        return true;
+      }
+
       if (screen === 'verification' || screen === 'search' || screen === 'notifications' || screen === 'auto') {
         setScreen('home');
         return true;
@@ -822,7 +903,7 @@ export default function App() {
 
     const subscription = BackHandler.addEventListener('hardwareBackPress', handleHardwareBack);
     return () => subscription.remove();
-  }, [booting, screen, scannerTarget, mandatoryUpdate]);
+  }, [booting, screen, scannerTarget, mandatoryUpdate, autoViewMode, closeAutoSession]);
 
   useEffect(() => {
     if (screen !== 'scanner') return undefined;
@@ -840,6 +921,13 @@ export default function App() {
   useEffect(() => {
     if (screen === 'auto') loadAutoTasks();
   }, [screen, loadAutoTasks]);
+
+  useEffect(() => {
+    if (screen === 'auto') return undefined;
+    setAutoViewMode('list');
+    setAutoSelectedSession(null);
+    return undefined;
+  }, [screen]);
 
   useEffect(() => {
     if (screen === 'notifications') loadNotifications();
@@ -1254,6 +1342,7 @@ export default function App() {
       remark,
       entryMethod: 'MANUAL_OR_CAMERA',
       verificationSessionId: autoSessionId || '',
+      sessionId: autoSessionId || undefined,
       isNewPart: false,
       verificationType: 'auto',
       damageQty: dmg,
@@ -1321,7 +1410,7 @@ export default function App() {
       const partNumbers = Object.entries(autoLocalVerified || {})
         .filter(([, row]) => row.verified && !row.finalized)
         .map(([part]) => part);
-      await finalizeAutoCounts(partNumbers);
+      await finalizeAutoCounts(partNumbers, autoSessionId);
       setAutoLocalVerified((current) => {
         const next = { ...current };
         Object.keys(next).forEach((part) => {
@@ -1743,6 +1832,14 @@ export default function App() {
       {screen === 'auto' && (
         <AutoPerpetualScreen
           onBack={goBack}
+          sessions={autoSessions}
+          today={autoToday}
+          todayCreated={autoTodayCreated}
+          todayMessage={autoTodayMessage}
+          viewMode={autoViewMode}
+          selectedSession={autoSelectedSession}
+          readOnly={autoReadOnly}
+          reaudit={autoReaudit}
           sessionId={autoSessionId}
           tasks={autoTasks}
           localVerified={autoLocalVerified}
@@ -1751,6 +1848,8 @@ export default function App() {
           busy={autoBusy}
           syncStatus={syncStatus}
           onRefresh={loadAutoTasks}
+          onOpenSession={openAutoSession}
+          onCloseSession={closeAutoSession}
           onSaveLocal={saveAutoLocal}
           onSubmitVerified={submitAutoVerified}
           submitting={autoSubmitting}

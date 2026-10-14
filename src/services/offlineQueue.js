@@ -177,6 +177,7 @@ function rowToPayload(row) {
     entryMethod: row.entry_method,
     clientId: row.client_id,
     verificationSessionId: row.verification_session_id || '',
+    sessionId: row.verification_session_id || '',
     isNewPart: Boolean(row.is_new_part),
     verificationType: row.verification_type || 'physical',
     damageQty: Number(row.damage_qty || 0),
@@ -187,7 +188,7 @@ function rowToPayload(row) {
 
 async function syncOneRow(payload) {
   if (payload.verificationType === 'auto' && payload.autoCountPhase === 'finalize') {
-    return finalizeAutoCounts([payload.partNumber]);
+    return finalizeAutoCounts([payload.partNumber], payload.sessionId);
   }
   if (payload.verificationType === 'auto') {
     return saveAutoCount(payload);

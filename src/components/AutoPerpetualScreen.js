@@ -12,10 +12,12 @@ import {
   TouchableOpacity,
   View,
 } from 'react-native';
-import { BLUE, BORDER, CARD_SOLID, DARK, MUTED, SUCCESS, WARNING } from '../theme';
+import { BLUE, BORDER, CARD_SOLID, DARK, MUTED, SUCCESS, WARNING, DANGER } from '../theme';
 import { calculateVerification, numberValue } from '../utils/stockHelpers';
 import { Empty, Header, PrimaryButton, SecondaryButton, StatusPill, SyncStatusBanner } from './ui';
 import { ScreenBackground } from './ScreenBackground';
+
+export const TODAY_SESSION_NOT_CREATED = "Today's session is not created yet";
 
 function ProgressBar({ verified, total }) {
   const pct = total > 0 ? Math.min(100, Math.round((verified / total) * 100)) : 0;
@@ -40,7 +42,7 @@ function revealedSystemQty(task, local) {
   return null;
 }
 
-function TaskCard({ task, local, onPress }) {
+function TaskCard({ task, local, onPress, readOnly }) {
   const verified = Boolean(local?.verified || task?.count_saved);
   const finalized = Boolean(local?.finalized || task?.quantity_finalized);
   const systemQty = revealedSystemQty(task, local);
@@ -54,6 +56,7 @@ function TaskCard({ task, local, onPress }) {
         styles.taskCard,
         verified && matched && styles.taskCardMatched,
         verified && mismatch && styles.taskCardWarn,
+        readOnly && styles.taskCardReadonly,
       ]}
       onPress={onPress}
       activeOpacity={0.85}
@@ -61,7 +64,7 @@ function TaskCard({ task, local, onPress }) {
       <View style={{ flex: 1 }}>
         <View style={styles.taskTopRow}>
           <Text style={styles.partNo}>{task.part_number}</Text>
-          {finalized ? <StatusPill value="SUBMITTED" /> : verified ? <StatusPill value="SAVED" /> : null}
+          {finalized ? <StatusPill value="SUBMITTED" /> : verified ? <StatusPill value="SAVED" /> : readOnly ? <StatusPill value="PENDING" /> : null}
         </View>
         <Text style={styles.partName}>{task.part_name || '-'}</Text>
         <Text style={styles.meta}>
@@ -77,6 +80,37 @@ function TaskCard({ task, local, onPress }) {
           </View>
         ) : null}
       </View>
+    </TouchableOpacity>
+  );
+}
+
+function SessionCard({ session, onOpen, onReaudit }) {
+  const status = session.card_status || (session.is_today ? 'TODAY' : session.pending_count > 0 ? 'EXPIRED' : 'COMPLETED');
+  const pending = Math.max(0, numberValue(session.pending_count));
+  const assigned = numberValue(session.assigned_count);
+  const verified = numberValue(session.verified_count);
+  const showReaudit = Boolean(session.reaudit_available && onReaudit);
+
+  return (
+    <TouchableOpacity style={styles.sessionCard} onPress={() => onOpen?.(session)} activeOpacity={0.85}>
+      <View style={styles.taskTopRow}>
+        <Text style={styles.sessionId}>{session.session_id || session.audit_id || 'Session'}</Text>
+        <StatusPill value={status} />
+      </View>
+      <Text style={styles.sessionSub}>{session.allocation_date || ''}{session.is_today ? ' · IST today' : ''}</Text>
+      <Text style={styles.sessionMeta}>Allocated: {assigned} · Verified: {verified} · Pending: {pending}</Text>
+      <View style={styles.miniTrack}>
+        <View style={[styles.miniFill, { width: `${Math.min(100, numberValue(session.progress_pct))}%` }]} />
+      </View>
+      {showReaudit ? (
+        <TouchableOpacity
+          style={styles.reauditBtn}
+          onPress={() => onReaudit(session)}
+          activeOpacity={0.85}
+        >
+          <Text style={styles.reauditBtnText}>Re-audit</Text>
+        </TouchableOpacity>
+      ) : null}
     </TouchableOpacity>
   );
 }
@@ -97,6 +131,7 @@ function VerifyModal({
   isEdit,
   revealed,
   finalized,
+  readOnly,
   onClose,
   onSave,
   busy,
@@ -104,6 +139,7 @@ function VerifyModal({
   if (!task) return null;
   const systemQty = revealed ? (task.revealedSystemQty ?? task.system_qty) : null;
   const diff = revealed ? calculateVerification(systemQty, physicalQty, 0) : null;
+  const locked = Boolean(finalized || readOnly);
 
   return (
     <Modal visible={visible} transparent animationType="slide" onRequestClose={onClose}>
@@ -114,7 +150,7 @@ function VerifyModal({
         <TouchableOpacity style={styles.modalBackdrop} activeOpacity={1} onPress={onClose} />
         <View style={styles.modalSheet}>
           <Text style={styles.modalTitle}>
-            {finalized ? 'Submitted Count' : isEdit ? 'Correct Physical Quantity' : 'Blind Physical Count'}
+            {finalized ? 'Submitted Count' : readOnly ? 'Expired session (read-only)' : isEdit ? 'Correct Physical Quantity' : 'Blind Physical Count'}
           </Text>
           <Text style={styles.partNo}>{task.part_number}</Text>
           <Text style={styles.partName}>{task.part_name || '-'}</Text>
@@ -126,7 +162,7 @@ function VerifyModal({
             <View style={styles.infoCell}>
               <Text style={styles.infoLabel}>{revealed ? 'System Qty' : 'Physical Quantity'}</Text>
               <Text style={styles.infoValue}>
-                {revealed ? (systemQty ?? '-') : 'Count on shelf, then Save'}
+                {revealed ? (systemQty ?? '-') : (locked ? 'Not counted' : 'Count on shelf, then Save')}
               </Text>
             </View>
             {revealed ? (
@@ -150,8 +186,8 @@ function VerifyModal({
             placeholder="Physical Qty"
             keyboardType="decimal-pad"
             placeholderTextColor={MUTED}
-            editable={!finalized}
-            autoFocus={!finalized}
+            editable={!locked}
+            autoFocus={!locked}
           />
           <View style={styles.twoCol}>
             <TextInput
@@ -161,7 +197,7 @@ function VerifyModal({
               placeholder="Damage Qty"
               keyboardType="decimal-pad"
               placeholderTextColor={MUTED}
-              editable={!finalized}
+              editable={!locked}
             />
             <TextInput
               style={[styles.input, styles.half, { marginRight: 0 }]}
@@ -170,7 +206,7 @@ function VerifyModal({
               placeholder="Physical LOC"
               autoCapitalize="characters"
               placeholderTextColor={MUTED}
-              editable={!finalized}
+              editable={!locked}
             />
           </View>
           <TextInput
@@ -179,9 +215,9 @@ function VerifyModal({
             onChangeText={setRemark}
             placeholder="Remark (optional)"
             placeholderTextColor={MUTED}
-            editable={!finalized}
+            editable={!locked}
           />
-          {isEdit && !finalized ? (
+          {isEdit && !locked ? (
             <TextInput
               style={styles.input}
               value={correctionReason}
@@ -192,8 +228,8 @@ function VerifyModal({
           ) : null}
 
           <View style={styles.modalActions}>
-            <SecondaryButton title={finalized ? 'Close' : 'Cancel'} onPress={onClose} />
-            {finalized ? null : <PrimaryButton title="Save" onPress={onSave} busy={busy} compact />}
+            <SecondaryButton title={locked ? 'Close' : 'Cancel'} onPress={onClose} />
+            {locked ? null : <PrimaryButton title="Save" onPress={onSave} busy={busy} compact />}
           </View>
         </View>
       </KeyboardAvoidingView>
@@ -203,6 +239,14 @@ function VerifyModal({
 
 export default function AutoPerpetualScreen({
   onBack,
+  sessions = [],
+  today,
+  todayCreated,
+  todayMessage,
+  viewMode = 'list',
+  selectedSession,
+  readOnly = false,
+  reaudit = false,
   sessionId,
   tasks,
   localVerified,
@@ -211,6 +255,8 @@ export default function AutoPerpetualScreen({
   busy,
   syncStatus,
   onRefresh,
+  onOpenSession,
+  onCloseSession,
   onSaveLocal,
   onSubmitVerified,
   submitting,
@@ -223,9 +269,19 @@ export default function AutoPerpetualScreen({
   const [correctionReason, setCorrectionReason] = useState('');
   const [saving, setSaving] = useState(false);
 
+  const todaySession = useMemo(
+    () => (sessions || []).find((row) => row.is_today || row.card_status === 'TODAY'),
+    [sessions]
+  );
+  const previousSessions = useMemo(
+    () => (sessions || []).filter((row) => !(row.is_today || row.card_status === 'TODAY')),
+    [sessions]
+  );
+
   const totalAssigned = assignedCount || tasks.length;
   const localVerifiedCount = Object.keys(localVerified || {}).length;
   const verifiedCount = Math.max(completedCount || 0, localVerifiedCount);
+  const sessionLocked = Boolean(readOnly && !reaudit);
 
   const unsyncedVerified = useMemo(
     () => Object.values(localVerified || {}).filter((row) => row.verified && !row.finalized),
@@ -256,6 +312,10 @@ export default function AutoPerpetualScreen({
 
   const handleSave = async () => {
     if (!selected) return;
+    if (sessionLocked || selected.quantity_finalized) {
+      Alert.alert('Locked', 'Edit, Save and Final Submit are disabled for this view.');
+      return;
+    }
     if (physicalQty === '' || numberValue(physicalQty) < 0) {
       Alert.alert('Physical Quantity', 'Enter a valid physical quantity.');
       return;
@@ -293,6 +353,10 @@ export default function AutoPerpetualScreen({
   };
 
   const confirmSubmit = () => {
+    if (sessionLocked) {
+      Alert.alert('Locked', 'Final Submit is disabled for expired sessions. Use Re-audit for pending items.');
+      return;
+    }
     Alert.alert(
       'Final Submit',
       `Submit ${unsyncedVerified.length} saved part(s)? The latest saved quantity on the server becomes the final Physical Quantity.`,
@@ -303,49 +367,99 @@ export default function AutoPerpetualScreen({
     );
   };
 
+  const handleBack = () => {
+    if (viewMode !== 'list') {
+      closeModal();
+      onCloseSession?.();
+      return;
+    }
+    onBack();
+  };
+
   const selectedLocal = selected ? localVerified?.[selected.part_number] : null;
   const selectedRevealed = Boolean(selectedLocal?.verified || selected?.count_saved);
   const selectedFinalized = Boolean(selectedLocal?.finalized || selected?.quantity_finalized);
+  const listMode = viewMode === 'list';
+  const detailTitle = reaudit ? 'Re-audit' : (selectedSession?.is_today ? 'Today' : 'Session');
 
   return (
     <ScreenBackground>
       <View style={styles.flex}>
-        <Header title="Auto Perpetual" onBack={onBack} action="Refresh" onAction={onRefresh} />
+        <Header title={listMode ? 'Auto Perpetual' : detailTitle} onBack={handleBack} action="Refresh" onAction={onRefresh} />
         <SyncStatusBanner status={syncStatus} />
         <ScrollView
           style={styles.flex}
           contentContainerStyle={styles.content}
           keyboardShouldPersistTaps="handled"
         >
-          <Text style={styles.sectionLabel}>TODAY&apos;S SESSION</Text>
-          <View style={styles.sessionCard}>
-            <Text style={styles.sessionId}>{sessionId || 'Loading session…'}</Text>
-            <Text style={styles.sessionSub}>Backend daily Auto Perpetual session (IST)</Text>
-          </View>
+          {listMode ? (
+            <>
+              <Text style={styles.sectionLabel}>TODAY&apos;S SESSION{today ? ` · ${today}` : ''}</Text>
+              {busy && !sessions.length ? <ActivityIndicator color={BLUE} style={{ marginVertical: 20 }} /> : null}
+              {todayCreated && todaySession ? (
+                <SessionCard session={todaySession} onOpen={(row) => onOpenSession?.(row, 'view')} />
+              ) : (
+                <View style={styles.noticeCard}>
+                  <Text style={styles.noticeText}>{todayMessage || TODAY_SESSION_NOT_CREATED}</Text>
+                </View>
+              )}
 
-          <ProgressBar verified={verifiedCount} total={totalAssigned || tasks.length} />
+              <Text style={styles.sectionLabel}>PREVIOUS SESSIONS</Text>
+              {!busy && previousSessions.length === 0 ? <Empty text="No previous Auto Perpetual sessions." /> : null}
+              {previousSessions.map((row) => (
+                <SessionCard
+                  key={`${row.session_id || ''}-${row.allocation_date || ''}`}
+                  session={row}
+                  onOpen={(item) => onOpenSession?.(item, 'view')}
+                  onReaudit={row.reaudit_available ? (item) => onOpenSession?.(item, 'reaudit') : undefined}
+                />
+              ))}
+            </>
+          ) : (
+            <>
+              <View style={styles.sessionCard}>
+                <View style={styles.taskTopRow}>
+                  <Text style={styles.sessionId}>{sessionId || selectedSession?.session_id || 'Session'}</Text>
+                  <StatusPill value={reaudit ? 'RE-AUDIT' : (selectedSession?.card_status || (sessionLocked ? 'EXPIRED' : 'TODAY'))} />
+                </View>
+                <Text style={styles.sessionSub}>
+                  {selectedSession?.allocation_date || today || ''}
+                  {reaudit ? ' · Pending items only' : sessionLocked ? ' · Read-only' : ' · Backend daily Auto Perpetual session (IST)'}
+                </Text>
+              </View>
 
-          <Text style={styles.sectionLabel}>ASSIGNED PARTS ({tasks.length})</Text>
-          {busy && !tasks.length ? <ActivityIndicator color={BLUE} style={{ marginVertical: 20 }} /> : null}
-          {!busy && tasks.length === 0 ? <Empty text="No Auto Perpetual tasks for today." /> : null}
-          {tasks.map((task) => (
-            <TaskCard
-              key={`${task.part_number}-${task.id || ''}`}
-              task={task}
-              local={localVerified?.[task.part_number]}
-              onPress={() => openTask(task)}
-            />
-          ))}
+              <ProgressBar verified={verifiedCount} total={totalAssigned || tasks.length} />
+
+              <Text style={styles.sectionLabel}>
+                {reaudit ? `PENDING PARTS (${tasks.length})` : `ASSIGNED PARTS (${tasks.length})`}
+              </Text>
+              {busy && !tasks.length ? <ActivityIndicator color={BLUE} style={{ marginVertical: 20 }} /> : null}
+              {!busy && tasks.length === 0 ? (
+                <Empty text={reaudit ? 'No pending items to re-audit.' : 'No Auto Perpetual tasks in this session.'} />
+              ) : null}
+              {tasks.map((task) => (
+                <TaskCard
+                  key={`${task.part_number}-${task.id || ''}`}
+                  task={task}
+                  local={localVerified?.[task.part_number]}
+                  readOnly={sessionLocked}
+                  onPress={() => openTask(task)}
+                />
+              ))}
+            </>
+          )}
         </ScrollView>
 
-        <View style={styles.stickyBar}>
-          <PrimaryButton
-            title={`Final Submit (${unsyncedVerified.length})`}
-            onPress={confirmSubmit}
-            busy={submitting}
-            disabled={!unsyncedVerified.length}
-          />
-        </View>
+        {!listMode && !sessionLocked ? (
+          <View style={styles.stickyBar}>
+            <PrimaryButton
+              title={`Final Submit (${unsyncedVerified.length})`}
+              onPress={confirmSubmit}
+              busy={submitting}
+              disabled={!unsyncedVerified.length}
+            />
+          </View>
+        ) : null}
 
         <VerifyModal
           visible={Boolean(selected)}
@@ -363,6 +477,7 @@ export default function AutoPerpetualScreen({
           isEdit={selectedRevealed}
           revealed={selectedRevealed}
           finalized={selectedFinalized}
+          readOnly={sessionLocked}
           onClose={closeModal}
           onSave={handleSave}
           busy={saving}
@@ -384,8 +499,31 @@ const styles = StyleSheet.create({
     borderRadius: 16,
     marginBottom: 12,
   },
-  sessionId: { color: DARK, fontSize: 16, fontWeight: '900' },
+  sessionId: { color: DARK, fontSize: 16, fontWeight: '900', flex: 1, marginRight: 8 },
   sessionSub: { marginTop: 4, color: MUTED, fontSize: 11 },
+  sessionMeta: { marginTop: 8, color: DARK, fontSize: 12, fontWeight: '700' },
+  miniTrack: { marginTop: 10, height: 6, borderRadius: 6, backgroundColor: 'rgba(62, 224, 255, 0.16)', overflow: 'hidden' },
+  miniFill: { height: 6, backgroundColor: SUCCESS },
+  noticeCard: {
+    padding: 16,
+    backgroundColor: CARD_SOLID,
+    borderWidth: 1,
+    borderColor: BORDER,
+    borderRadius: 16,
+    marginBottom: 16,
+  },
+  noticeText: { color: DARK, fontSize: 14, fontWeight: '800' },
+  reauditBtn: {
+    marginTop: 12,
+    alignSelf: 'flex-start',
+    paddingHorizontal: 14,
+    paddingVertical: 8,
+    borderRadius: 10,
+    backgroundColor: 'rgba(255, 93, 108, 0.16)',
+    borderWidth: 1,
+    borderColor: DANGER,
+  },
+  reauditBtnText: { color: DANGER, fontWeight: '900', fontSize: 12 },
   progressWrap: {
     marginBottom: 14,
     padding: 14,
@@ -409,6 +547,7 @@ const styles = StyleSheet.create({
   },
   taskCardMatched: { borderColor: SUCCESS, backgroundColor: 'rgba(61, 255, 138, 0.10)' },
   taskCardWarn: { borderColor: WARNING, backgroundColor: 'rgba(240, 193, 77, 0.10)' },
+  taskCardReadonly: { opacity: 0.96 },
   taskTopRow: { flexDirection: 'row', justifyContent: 'space-between', alignItems: 'center' },
   partNo: { color: DARK, fontSize: 14, fontWeight: '900' },
   partName: { marginTop: 3, color: MUTED, fontSize: 11 },
