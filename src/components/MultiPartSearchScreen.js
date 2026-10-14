@@ -11,6 +11,7 @@ import {
 } from 'react-native';
 import { BLUE, BORDER, CARD_SOLID, DARK, MUTED, SUCCESS, DANGER, WARNING } from '../theme';
 import { AgingThresholdSelector, Empty, Header, PrimaryButton, StockResultCard } from './ui';
+import { ScreenBackground } from './ScreenBackground';
 
 export default function MultiPartSearchScreen({
   onBack,
@@ -25,6 +26,7 @@ export default function MultiPartSearchScreen({
   uploadMessage,
 }) {
   return (
+    <ScreenBackground>
     <KeyboardAvoidingView
       style={styles.flex}
       behavior={Platform.OS === 'ios' ? 'padding' : 'height'}
@@ -94,6 +96,7 @@ export default function MultiPartSearchScreen({
         ) : null}
       </ScrollView>
     </KeyboardAvoidingView>
+    </ScreenBackground>
   );
 }
 

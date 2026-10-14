@@ -10,7 +10,7 @@
 import * as SQLite from 'expo-sqlite';
 import NetInfo from '@react-native-community/netinfo';
 import * as Crypto from 'expo-crypto';
-import { submitStockVerification, submitStockVerificationBatch, ApiError } from '../api';
+import { submitStockVerification, submitStockVerificationBatch, saveAutoCount, finalizeAutoCounts, ApiError } from '../api';
 
 const DB_NAME = 'sleeping_stock_offline.db';
 const MAX_RETRY_BEFORE_BACKOFF = 3;
@@ -60,6 +60,8 @@ export async function initOfflineQueue() {
     `ALTER TABLE verification_queue ADD COLUMN is_new_part INTEGER NOT NULL DEFAULT 0`,
     `ALTER TABLE verification_queue ADD COLUMN verification_type TEXT NOT NULL DEFAULT 'physical'`,
     `ALTER TABLE verification_queue ADD COLUMN damage_qty REAL NOT NULL DEFAULT 0`,
+    `ALTER TABLE verification_queue ADD COLUMN correction_reason TEXT`,
+    `ALTER TABLE verification_queue ADD COLUMN auto_count_phase TEXT`,
   ]) {
     try {
       await db.execAsync(statement);
@@ -108,14 +110,16 @@ export async function enqueueVerification({
   isNewPart,
   verificationType,
   damageQty,
+  correctionReason,
+  autoCountPhase,
 }) {
   const db = await getDb();
   const clientId = Crypto.randomUUID();
   const createdAt = new Date().toISOString();
   await db.runAsync(
     `INSERT INTO verification_queue
-      (client_id, part_number, part_name, physical_qty, location, remark, entry_method, verification_session_id, is_new_part, verification_type, damage_qty, created_at, sync_status, retry_count)
-     VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, 'pending', 0)`,
+      (client_id, part_number, part_name, physical_qty, location, remark, entry_method, verification_session_id, is_new_part, verification_type, damage_qty, correction_reason, auto_count_phase, created_at, sync_status, retry_count)
+     VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, 'pending', 0)`,
     [
       clientId,
       partNumber,
@@ -128,6 +132,8 @@ export async function enqueueVerification({
       isNewPart ? 1 : 0,
       verificationType || 'physical',
       Number(damageQty || 0),
+      correctionReason || '',
+      autoCountPhase || '',
       createdAt,
     ]
   );
@@ -174,7 +180,19 @@ function rowToPayload(row) {
     isNewPart: Boolean(row.is_new_part),
     verificationType: row.verification_type || 'physical',
     damageQty: Number(row.damage_qty || 0),
+    correctionReason: row.correction_reason || '',
+    autoCountPhase: row.auto_count_phase || '',
   };
+}
+
+async function syncOneRow(payload) {
+  if (payload.verificationType === 'auto' && payload.autoCountPhase === 'finalize') {
+    return finalizeAutoCounts([payload.partNumber]);
+  }
+  if (payload.verificationType === 'auto') {
+    return saveAutoCount(payload);
+  }
+  return submitStockVerification(payload);
 }
 
 function shouldBackoff(row) {
@@ -217,7 +235,7 @@ async function syncRowsParallel(db, rows) {
     );
 
     try {
-      await submitStockVerification(rowToPayload(row));
+      await syncOneRow(rowToPayload(row));
       await db.runAsync(`DELETE FROM verification_queue WHERE client_id = ?`, [row.client_id]);
       synced += 1;
     } catch (error) {
@@ -248,14 +266,32 @@ async function syncRowsViaBatch(db, rows) {
     );
   }
 
-  const response = await submitStockVerificationBatch(rows.map(rowToPayload));
-  const resultRows = Array.isArray(response?.results) ? response.results : [];
-  const byClient = new Map(resultRows.map((r) => [r.client_id || r.clientId, r]));
-
+  const physicalRows = rows.filter((row) => (row.verification_type || 'physical') !== 'auto');
+  const autoRows = rows.filter((row) => row.verification_type === 'auto');
   let synced = 0;
   let failed = 0;
 
-  for (const row of rows) {
+  for (const row of autoRows) {
+    try {
+      await syncOneRow(rowToPayload(row));
+      await db.runAsync(`DELETE FROM verification_queue WHERE client_id = ?`, [row.client_id]);
+      synced += 1;
+    } catch (error) {
+      failed += 1;
+      const message = error instanceof ApiError ? error.message : String(error?.message || error);
+      await markFailed(db, row.client_id, message);
+    }
+  }
+
+  if (!physicalRows.length) {
+    return { synced, failed };
+  }
+
+  const response = await submitStockVerificationBatch(physicalRows.map(rowToPayload));
+  const resultRows = Array.isArray(response?.results) ? response.results : [];
+  const byClient = new Map(resultRows.map((r) => [r.client_id || r.clientId, r]));
+
+  for (const row of physicalRows) {
     const item = byClient.get(row.client_id);
     const ok = item ? (item.success !== false && !item.error) : response?.success !== false;
     if (ok) {
@@ -265,15 +301,6 @@ async function syncRowsViaBatch(db, rows) {
       failed += 1;
       await markFailed(db, row.client_id, item?.error || item?.message || 'Batch item failed');
     }
-  }
-
-  // If the server accepted the batch but omitted per-item results, treat HTTP 2xx as synced.
-  if (!resultRows.length && response && response.success !== false && failed === 0) {
-    for (const row of rows) {
-      await db.runAsync(`DELETE FROM verification_queue WHERE client_id = ?`, [row.client_id]);
-    }
-    synced = rows.length;
-    failed = 0;
   }
 
   return { synced, failed };

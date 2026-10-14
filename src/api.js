@@ -194,6 +194,8 @@ export const submitStockVerification = ({
   isNewPart,
   verificationType = 'physical',
   damageQty = 0,
+  correctionReason,
+  autoCountPhase,
 }) => request('post', '/mobile/stock-verification', {
   data: {
     part_number: partNumber,
@@ -207,6 +209,8 @@ export const submitStockVerification = ({
     is_new_part: Boolean(isNewPart),
     verification_type: verificationType || 'physical',
     damage_qty: Number(damageQty || 0),
+    correction_reason: correctionReason || undefined,
+    auto_count_phase: autoCountPhase || undefined,
   },
 });
 
@@ -231,6 +235,8 @@ export const submitStockVerificationBatch = (items) => request('post', '/mobile/
       is_new_part: Boolean(item.isNewPart),
       verification_type: item.verificationType || 'physical',
       damage_qty: Number(item.damageQty || 0),
+      correction_reason: item.correctionReason || undefined,
+      auto_count_phase: item.autoCountPhase || undefined,
     })),
   },
   timeout: Math.max(REQUEST_TIMEOUT_MS, 45000),
@@ -238,6 +244,32 @@ export const submitStockVerificationBatch = (items) => request('post', '/mobile/
 
 export const getAutoPerpetualTasks = () => request('get', '/mobile/auto-perpetual/tasks');
 export const getAutoPerpetualSessionToday = () => request('get', '/mobile/auto-perpetual/session/today');
+export const saveAutoCount = ({
+  partNumber,
+  physicalQty,
+  location,
+  remark,
+  damageQty = 0,
+  correctionReason,
+  clientId,
+  entryMethod = 'MANUAL',
+}) => request('post', '/mobile/auto-perpetual/count', {
+  data: {
+    part_number: partNumber,
+    physical_qty: physicalQty,
+    location,
+    remark,
+    damage_qty: Number(damageQty || 0),
+    correction_reason: correctionReason || undefined,
+    client_id: clientId || undefined,
+    entry_method: entryMethod,
+  },
+});
+export const finalizeAutoCounts = (partNumbers = []) => request('post', '/mobile/auto-perpetual/finalize', {
+  data: {
+    part_numbers: partNumbers,
+  },
+});
 export const getStockVerificationHistory = (options = {}) => request('get', '/mobile/stock-verification/history', {
   params: typeof options === 'string' ? { part_number: options } : { ...(options.partNumber ? { part_number: options.partNumber } : {}), ...(options.limit ? { limit: options.limit } : {}) },
 });

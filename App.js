@@ -58,6 +58,8 @@ import {
   getLatestAppVersion,
   getAutoPerpetualTasks,
   getAutoPerpetualSessionToday,
+  saveAutoCount,
+  finalizeAutoCounts,
   isBranchTransferredError,
 } from './src/api';
 import { MANUAL_PAIRING_API_BASE_URL, normalizeApiBaseUrl } from './src/config/env';
@@ -101,6 +103,8 @@ import { BLUE, BG, BORDER, CARD_SOLID, DANGER, DARK, MUTED, NEON_BLUE, NEON_CYAN
 import AutoPerpetualScreen from './src/components/AutoPerpetualScreen';
 import StockAvailabilityScreen from './src/components/StockAvailabilityScreen';
 import MultiPartSearchScreen from './src/components/MultiPartSearchScreen';
+import { ScreenBackground } from './src/components/ScreenBackground';
+import VoiceTypeButton from './src/components/VoiceTypeButton';
 import MandatoryUpdateScreen from './src/components/MandatoryUpdateScreen';
 import IncomingRequestPopup from './src/components/IncomingRequestPopup';
 import { asOwnedPickedRequest, buildIncomingAlert, canCompleteRequest, canEditRequest, canPickRequest, canReleaseRequest, canSnoozeRequest, canTransferRequest, findRequestGroup, formatSlaRemaining, isBranchRequest, isRequestPickedPush, isRequestTransferredPush, ownerName, requestStatus, resolveNotificationData, statusLabelFor } from './src/utils/requestAlert';
@@ -395,17 +399,41 @@ export default function App() {
       setAutoSessionId(dailySessionId);
 
       const data = await getAutoPerpetualTasks();
-      setAutoTasks(data?.tasks || []);
+      const tasks = data?.tasks || [];
+      setAutoTasks(tasks);
       // Prefer the session/today ID; tasks.session_id must match after backend fix.
       if (!dailySessionId && data?.session_id) setAutoSessionId(data.session_id);
-      setAutoAssignedCount(numberValue(data?.assigned_count || data?.tasks?.length || 0));
+      setAutoAssignedCount(numberValue(data?.assigned_count || tasks.length || 0));
       setAutoCompletedCount(numberValue(data?.completed_count || 0));
       // Drop local entries that are no longer in today's pending list once server completed them.
       setAutoLocalVerified((current) => {
-        const pendingParts = new Set((data?.tasks || []).map((t) => cleanPartNumber(t.part_number)));
+        const pendingParts = new Set(tasks.map((t) => cleanPartNumber(t.part_number)));
         const next = {};
         Object.entries(current).forEach(([part, row]) => {
           if (pendingParts.has(part) || !row.synced) next[part] = row;
+        });
+        tasks.forEach((task) => {
+          const part = cleanPartNumber(task.part_number);
+          if (!task.count_saved) {
+            // Residual offline risk: never copy restricted qty into UI state before first Save.
+            if (next[part] && !next[part].verified) {
+              next[part] = { ...next[part], systemQty: undefined, status: '', differenceQty: 0 };
+            }
+            return;
+          }
+          next[part] = {
+            ...(next[part] || {}),
+            verified: true,
+            synced: true,
+            physicalQty: task.physical_quantity,
+            originalPhysicalQty: task.original_physical_quantity ?? next[part]?.originalPhysicalQty,
+            systemQty: task.system_qty,
+            status: String(task.quantity_status || next[part]?.status || '').toUpperCase(),
+            differenceQty: task.difference,
+            editCount: task.edit_count || next[part]?.editCount || 0,
+            editHistory: task.quantity_edit_history || next[part]?.editHistory || [],
+            finalized: Boolean(task.quantity_finalized),
+          };
         });
         return next;
       });
@@ -1198,10 +1226,27 @@ export default function App() {
     }
   };
 
-  const saveAutoLocal = async ({ task, physicalQty: qty, damageQty: dmg, location, remark, status, differenceQty }) => {
+  const saveAutoLocal = async ({ task, physicalQty: qty, damageQty: dmg, location, remark, status, differenceQty, correctionReason, isEdit }) => {
     const partNumber = cleanPartNumber(task.part_number);
-    // Instant local queue write — no await on network.
-    const clientId = await enqueueAndTrySync({
+    const existing = autoLocalVerified?.[partNumber];
+    const originalPhysicalQty = existing?.originalPhysicalQty ?? existing?.physicalQty ?? qty;
+    const previousQty = existing?.physicalQty;
+    const editHistory = [...(existing?.editHistory || [])];
+    let editCount = existing?.editCount || 0;
+    if (isEdit && existing?.verified && previousQty !== qty) {
+      if (!String(correctionReason || '').trim()) {
+        Alert.alert('Correction reason', 'Enter a reason before changing the counted quantity.');
+        return;
+      }
+      editCount += 1;
+      editHistory.push({
+        previous_quantity: previousQty,
+        new_quantity: qty,
+        correction_reason: String(correctionReason || '').trim(),
+        edited_at: new Date().toISOString(),
+      });
+    }
+    const payload = {
       partNumber,
       partName: task.part_name || '',
       physicalQty: qty,
@@ -1212,22 +1257,54 @@ export default function App() {
       isNewPart: false,
       verificationType: 'auto',
       damageQty: dmg,
-    });
+      correctionReason: String(correctionReason || '').trim() || undefined,
+      autoCountPhase: 'save',
+    };
+    let clientId = existing?.clientId;
+    let revealed = {
+      systemQty: existing?.systemQty,
+      status,
+      differenceQty,
+    };
+    try {
+      const result = await saveAutoCount(payload);
+      clientId = result?.id || clientId;
+      revealed = {
+        systemQty: result?.system_qty,
+        status: String(result?.verification_status || status || '').toUpperCase(),
+        differenceQty: result?.difference_qty ?? differenceQty,
+        originalPhysicalQty: result?.original_physical_quantity ?? originalPhysicalQty,
+        editCount: result?.edit_count ?? editCount,
+        editHistory: result?.quantity_edit_history || editHistory,
+      };
+    } catch (error) {
+      if (error instanceof ApiError && error.kind !== 'network' && error.kind !== 'timeout' && error.status && error.status < 500) {
+        Alert.alert('Save Failed', friendlyError(error));
+        return;
+      }
+      clientId = await enqueueAndTrySync(payload);
+    }
     setAutoLocalVerified((current) => ({
       ...current,
       [partNumber]: {
         verified: true,
-        synced: false,
+        synced: Boolean(revealed.systemQty != null),
+        finalized: false,
         clientId,
         physicalQty: qty,
+        originalPhysicalQty: revealed.originalPhysicalQty ?? originalPhysicalQty,
         damageQty: dmg,
         location,
         remark,
-        status,
-        differenceQty,
+        status: revealed.status,
+        differenceQty: revealed.differenceQty,
+        systemQty: revealed.systemQty,
+        editCount: revealed.editCount ?? editCount,
+        editHistory: revealed.editHistory || editHistory,
+        correctionReason: String(correctionReason || '').trim(),
       },
     }));
-    const count = await getPendingCount().catch(() => pendingCount + 1);
+    const count = await getPendingCount().catch(() => pendingCount);
     setPendingCount(count);
   };
 
@@ -1237,24 +1314,27 @@ export default function App() {
       const result = await syncQueue();
       const stillPending = await getPendingCount().catch(() => 0);
       setPendingCount(stillPending);
-      // Only mark local rows synced when the queue is clear for those client IDs.
-      if (!stillPending) {
-        setAutoLocalVerified((current) => {
-          const next = { ...current };
-          Object.keys(next).forEach((part) => {
-            next[part] = { ...next[part], synced: true };
-          });
-          return next;
-        });
-      }
-      await loadAutoTasks();
       if (result?.skipped && result?.reason === 'offline') {
-        Alert.alert('Saved Offline', 'Verified parts are stored locally and will sync when online.');
-      } else if (stillPending > 0) {
+        Alert.alert('Saved Offline', 'Saved counts stay on this device until you are online. System quantity is not shown until the first Save syncs.');
+        return;
+      }
+      const partNumbers = Object.entries(autoLocalVerified || {})
+        .filter(([, row]) => row.verified && !row.finalized)
+        .map(([part]) => part);
+      await finalizeAutoCounts(partNumbers);
+      setAutoLocalVerified((current) => {
+        const next = { ...current };
+        Object.keys(next).forEach((part) => {
+          next[part] = { ...next[part], synced: true, finalized: true };
+        });
+        return next;
+      });
+      await loadAutoTasks();
+      if (stillPending > 0) {
         Alert.alert('Partial Sync', `${stillPending} record(s) still pending. They will retry automatically.`);
       }
     } catch (error) {
-      Alert.alert('Sync Failed', friendlyError(error));
+      Alert.alert('Final Submit Failed', friendlyError(error));
     } finally {
       setAutoSubmitting(false);
     }
@@ -1856,6 +1936,7 @@ function PairScreen(props) {
 
 function HomeScreen({ session, pendingCount, notificationCount, navigate, logout }) {
   return (
+    <ScreenBackground>
     <ScrollView contentContainerStyle={styles.homePage}>
       <View style={styles.homeHeader}>
         <View style={styles.flex}>
@@ -1918,6 +1999,7 @@ function HomeScreen({ session, pendingCount, notificationCount, navigate, logout
         </View>
       )}
     </ScrollView>
+    </ScreenBackground>
   );
 }
 
@@ -1931,7 +2013,11 @@ function VerificationScreen(props) {
     { matched: 0, shortage: 0, excess: 0 }
   );
   const diff = props.selectedPart ? differenceFor(props.selectedPart.systemQty, props.physicalQty, props.selectedPart.unitValue) : null;
+  const appendVoice = (chunk) => {
+    props.setInput((current) => `${current || ''}${chunk}`);
+  };
   return (
+    <ScreenBackground>
     <KeyboardAvoidingView
       style={styles.flex}
       behavior={Platform.OS === 'ios' ? 'padding' : 'height'}
@@ -1996,6 +2082,7 @@ function VerificationScreen(props) {
           />
           <SquareButton title="⌕" onPress={props.onLookup} />
           <SquareButton title="▣" onPress={props.onScan} />
+          <VoiceTypeButton onAppend={appendVoice} />
         </View>
         {props.selectedPart && (
           <>
@@ -2040,11 +2127,13 @@ function VerificationScreen(props) {
         </View>
       </View>
     </KeyboardAvoidingView>
+    </ScreenBackground>
   );
 }
 
 function NotificationsScreen({ onBack, rows, busy, refresh, openRequest, pickRequest, snoozeRequest }) {
   return (
+    <ScreenBackground>
     <View style={styles.flex}>
       <Header title="Request List" onBack={onBack} action="Refresh" onAction={refresh} />
       {busy && <ActivityIndicator style={{ marginTop: 16 }} color={BLUE} />}
@@ -2100,6 +2189,7 @@ function NotificationsScreen({ onBack, rows, busy, refresh, openRequest, pickReq
         }}
       />
     </View>
+    </ScreenBackground>
   );
 }
 

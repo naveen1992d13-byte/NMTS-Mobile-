@@ -11,6 +11,8 @@ import {
 } from 'react-native';
 import { BLUE, BORDER, CARD_SOLID, DARK, MUTED, WARNING } from '../theme';
 import { AgingThresholdSelector, Empty, Header, PrimaryButton, SecondaryButton, SquareButton, StockResultCard } from './ui';
+import VoiceTypeButton from './VoiceTypeButton';
+import { ScreenBackground } from './ScreenBackground';
 
 export default function StockAvailabilityScreen({
   onBack,
@@ -33,7 +35,12 @@ export default function StockAvailabilityScreen({
     return () => clearTimeout(timer);
   }, []);
 
+  const appendVoice = (chunk) => {
+    setInput((current) => `${current || ''}${chunk}`);
+  };
+
   return (
+    <ScreenBackground>
     <KeyboardAvoidingView
       style={styles.flex}
       behavior={Platform.OS === 'ios' ? 'padding' : 'height'}
@@ -57,6 +64,7 @@ export default function StockAvailabilityScreen({
             onSubmitEditing={onSearch}
           />
           <SquareButton title="▣" onPress={onScan} />
+          <VoiceTypeButton onAppend={appendVoice} />
         </View>
         <View style={styles.actionRow}>
           <SecondaryButton title="Multiple Search" onPress={onOpenMulti} />
@@ -100,6 +108,7 @@ export default function StockAvailabilityScreen({
         ) : null}
       </ScrollView>
     </KeyboardAvoidingView>
+    </ScreenBackground>
   );
 }
 

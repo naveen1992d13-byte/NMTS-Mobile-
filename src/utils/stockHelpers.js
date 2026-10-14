@@ -41,6 +41,14 @@ export function parseAgingDays(value) {
   return Number.isFinite(n) ? n : null;
 }
 
+export function isAgingStock(row, threshold = 90) {
+  const purchase = parseAgingDays(row?.purchaseAging);
+  const sales = parseAgingDays(row?.salesAging);
+  const limit = Number(threshold);
+  if (!Number.isFinite(limit)) return false;
+  return (purchase != null && purchase > limit) || (sales != null && sales > limit);
+}
+
 export function calculateVerification(systemQuantity, physicalQuantity, unitValue = 0) {
   const systemQty = Number(systemQuantity || 0);
   const physicalQty = Number(physicalQuantity || 0);

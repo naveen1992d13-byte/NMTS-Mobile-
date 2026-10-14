@@ -2,7 +2,7 @@
   "expo": {
     "name": "Sleeping Stock Mobile",
     "slug": "sleeping-stock-mobile",
-    "version": "1.4.5",
+    "version": "1.4.6",
     "orientation": "portrait",
     "userInterfaceStyle": "dark",
     "newArchEnabled": true,
@@ -14,10 +14,12 @@
     },
     "android": {
       "package": "in.sleepingstock.mobile",
-      "versionCode": 27,
+      "versionCode": 28,
       "googleServicesFile": "./google-services.json",
+      "icon": "./assets/source/sleeping-stock-app-icon-safe-zone.png",
       "permissions": [
         "CAMERA",
+        "RECORD_AUDIO",
         "POST_NOTIFICATIONS",
         "FOREGROUND_SERVICE",
         "FOREGROUND_SERVICE_MEDIA_PLAYBACK",
@@ -38,6 +40,16 @@
         {
           "cameraPermission": "Allow Sleeping Stock Mobile to scan pairing codes and part numbers.",
           "recordAudioAndroid": false
+        }
+      ],
+      [
+        "expo-speech-recognition",
+        {
+          "microphonePermission": "Allow Sleeping Stock Mobile to enter part numbers by voice.",
+          "speechRecognitionPermission": "Allow Sleeping Stock Mobile to convert speech into a part number.",
+          "androidSpeechServicePackages": [
+            "com.google.android.googlequicksearchbox"
+          ]
         }
       ],
       "expo-sqlite",

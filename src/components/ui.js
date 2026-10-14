@@ -9,6 +9,7 @@ import {
   View,
 } from 'react-native';
 import { BLUE, BORDER, CARD_SOLID, DANGER, DARK, MUTED, SUCCESS, WARNING } from '../theme';
+import { isAgingStock } from '../utils/stockHelpers';
 
 export function Header({ title, onBack, action, onAction }) {
   return (
@@ -137,8 +138,14 @@ export function AgingThresholdSelector({ value, onChange }) {
 }
 
 export function StockResultCard({ row, agingThreshold = 90 }) {
+  const aging = isAgingStock(row, agingThreshold);
   return (
-    <View style={styles.stockCard}>
+    <View style={[styles.stockCard, aging && styles.stockCardAging]}>
+      {aging ? (
+        <View style={styles.agingStockBadge}>
+          <Text style={styles.agingStockBadgeText}>AGING STOCK</Text>
+        </View>
+      ) : null}
       <Text style={styles.rowPartNo}>{row.partNumber}</Text>
       <Text style={styles.rowPartName}>{row.partName}</Text>
       <View style={styles.stockMetaRow}>
@@ -243,6 +250,25 @@ const styles = StyleSheet.create({
     borderWidth: 1,
     borderColor: BORDER,
     borderRadius: 15,
+  },
+  stockCardAging: {
+    backgroundColor: 'rgba(80, 16, 24, 0.92)',
+    borderColor: '#ff3b4d',
+    borderWidth: 1.5,
+  },
+  agingStockBadge: {
+    alignSelf: 'flex-start',
+    marginBottom: 8,
+    paddingHorizontal: 10,
+    paddingVertical: 4,
+    borderRadius: 8,
+    backgroundColor: '#ff3b4d',
+  },
+  agingStockBadgeText: {
+    color: '#fff7f7',
+    fontSize: 10,
+    fontWeight: '900',
+    letterSpacing: 0.6,
   },
   rowPartNo: { color: DARK, fontSize: 14, fontWeight: '900' },
   rowPartName: { marginTop: 3, color: MUTED, fontSize: 11 },

@@ -15,6 +15,7 @@ import {
 import { BLUE, BORDER, CARD_SOLID, DARK, MUTED, SUCCESS, WARNING } from '../theme';
 import { calculateVerification, numberValue } from '../utils/stockHelpers';
 import { Empty, Header, PrimaryButton, SecondaryButton, StatusPill, SyncStatusBanner } from './ui';
+import { ScreenBackground } from './ScreenBackground';
 
 function ProgressBar({ verified, total }) {
   const pct = total > 0 ? Math.min(100, Math.round((verified / total) * 100)) : 0;
@@ -31,9 +32,19 @@ function ProgressBar({ verified, total }) {
   );
 }
 
+function revealedSystemQty(task, local) {
+  if (local?.finalized || local?.verified) {
+    if (local?.systemQty != null && local.systemQty !== '') return local.systemQty;
+  }
+  if (task?.count_saved) return task.system_qty;
+  return null;
+}
+
 function TaskCard({ task, local, onPress }) {
-  const verified = Boolean(local?.verified);
-  const status = local?.status;
+  const verified = Boolean(local?.verified || task?.count_saved);
+  const finalized = Boolean(local?.finalized || task?.quantity_finalized);
+  const systemQty = revealedSystemQty(task, local);
+  const status = local?.status || (task?.quantity_status ? String(task.quantity_status).toUpperCase() : '');
   const matched = status === 'MATCHED';
   const mismatch = verified && status && status !== 'MATCHED';
 
@@ -50,17 +61,19 @@ function TaskCard({ task, local, onPress }) {
       <View style={{ flex: 1 }}>
         <View style={styles.taskTopRow}>
           <Text style={styles.partNo}>{task.part_number}</Text>
-          {verified ? <StatusPill value="VERIFIED" /> : null}
+          {finalized ? <StatusPill value="SUBMITTED" /> : verified ? <StatusPill value="SAVED" /> : null}
         </View>
         <Text style={styles.partName}>{task.part_name || '-'}</Text>
         <Text style={styles.meta}>
-          LOC: {task.loc || '-'} · Sys: {task.system_qty ?? '-'}
+          LOC: {task.loc || '-'}
           {task.coverage_kind === 'recheck' ? ' · RECHECK' : ''}
+          {local?.editCount ? ` · Edits: ${local.editCount}` : ''}
         </Text>
         {verified ? (
           <View style={styles.verifiedMeta}>
-            <Text style={styles.verifiedLine}>Physical Qty: {local.physicalQty}</Text>
-            <StatusPill value={status} />
+            <Text style={styles.verifiedLine}>Physical Qty: {local?.physicalQty ?? task.physical_quantity}</Text>
+            {systemQty != null ? <Text style={styles.verifiedLine}>Sys: {systemQty}</Text> : null}
+            {status ? <StatusPill value={status} /> : null}
           </View>
         ) : null}
       </View>
@@ -79,12 +92,18 @@ function VerifyModal({
   setLocation,
   remark,
   setRemark,
+  correctionReason,
+  setCorrectionReason,
+  isEdit,
+  revealed,
+  finalized,
   onClose,
   onSave,
   busy,
 }) {
   if (!task) return null;
-  const diff = calculateVerification(task.system_qty, physicalQty, 0);
+  const systemQty = revealed ? (task.revealedSystemQty ?? task.system_qty) : null;
+  const diff = revealed ? calculateVerification(systemQty, physicalQty, 0) : null;
 
   return (
     <Modal visible={visible} transparent animationType="slide" onRequestClose={onClose}>
@@ -94,7 +113,9 @@ function VerifyModal({
       >
         <TouchableOpacity style={styles.modalBackdrop} activeOpacity={1} onPress={onClose} />
         <View style={styles.modalSheet}>
-          <Text style={styles.modalTitle}>Physical Verification</Text>
+          <Text style={styles.modalTitle}>
+            {finalized ? 'Submitted Count' : isEdit ? 'Correct Physical Quantity' : 'Blind Physical Count'}
+          </Text>
           <Text style={styles.partNo}>{task.part_number}</Text>
           <Text style={styles.partName}>{task.part_name || '-'}</Text>
           <View style={styles.infoGrid}>
@@ -103,17 +124,23 @@ function VerifyModal({
               <Text style={styles.infoValue}>{task.loc || '-'}</Text>
             </View>
             <View style={styles.infoCell}>
-              <Text style={styles.infoLabel}>System Qty</Text>
-              <Text style={styles.infoValue}>{task.system_qty ?? 0}</Text>
+              <Text style={styles.infoLabel}>{revealed ? 'System Qty' : 'Physical Quantity'}</Text>
+              <Text style={styles.infoValue}>
+                {revealed ? (systemQty ?? '-') : 'Count on shelf, then Save'}
+              </Text>
             </View>
-            <View style={styles.infoCell}>
-              <Text style={styles.infoLabel}>Difference</Text>
-              <Text style={styles.infoValue}>{diff.differenceQty}</Text>
-            </View>
-            <View style={styles.infoCell}>
-              <Text style={styles.infoLabel}>Status</Text>
-              <StatusPill value={diff.status} />
-            </View>
+            {revealed ? (
+              <>
+                <View style={styles.infoCell}>
+                  <Text style={styles.infoLabel}>Difference</Text>
+                  <Text style={styles.infoValue}>{diff?.differenceQty ?? '-'}</Text>
+                </View>
+                <View style={styles.infoCell}>
+                  <Text style={styles.infoLabel}>Status</Text>
+                  {diff ? <StatusPill value={diff.status} /> : <Text style={styles.infoValue}>-</Text>}
+                </View>
+              </>
+            ) : null}
           </View>
 
           <TextInput
@@ -123,7 +150,8 @@ function VerifyModal({
             placeholder="Physical Qty"
             keyboardType="decimal-pad"
             placeholderTextColor={MUTED}
-            autoFocus
+            editable={!finalized}
+            autoFocus={!finalized}
           />
           <View style={styles.twoCol}>
             <TextInput
@@ -133,6 +161,7 @@ function VerifyModal({
               placeholder="Damage Qty"
               keyboardType="decimal-pad"
               placeholderTextColor={MUTED}
+              editable={!finalized}
             />
             <TextInput
               style={[styles.input, styles.half, { marginRight: 0 }]}
@@ -141,6 +170,7 @@ function VerifyModal({
               placeholder="Physical LOC"
               autoCapitalize="characters"
               placeholderTextColor={MUTED}
+              editable={!finalized}
             />
           </View>
           <TextInput
@@ -149,11 +179,21 @@ function VerifyModal({
             onChangeText={setRemark}
             placeholder="Remark (optional)"
             placeholderTextColor={MUTED}
+            editable={!finalized}
           />
+          {isEdit && !finalized ? (
+            <TextInput
+              style={styles.input}
+              value={correctionReason}
+              onChangeText={setCorrectionReason}
+              placeholder="Correction reason (required)"
+              placeholderTextColor={MUTED}
+            />
+          ) : null}
 
           <View style={styles.modalActions}>
-            <SecondaryButton title="Cancel" onPress={onClose} />
-            <PrimaryButton title="Save" onPress={onSave} busy={busy} compact />
+            <SecondaryButton title={finalized ? 'Close' : 'Cancel'} onPress={onClose} />
+            {finalized ? null : <PrimaryButton title="Save" onPress={onSave} busy={busy} compact />}
           </View>
         </View>
       </KeyboardAvoidingView>
@@ -180,25 +220,29 @@ export default function AutoPerpetualScreen({
   const [damageQty, setDamageQty] = useState('');
   const [location, setLocation] = useState('');
   const [remark, setRemark] = useState('');
+  const [correctionReason, setCorrectionReason] = useState('');
   const [saving, setSaving] = useState(false);
 
   const totalAssigned = assignedCount || tasks.length;
   const localVerifiedCount = Object.keys(localVerified || {}).length;
-  // Prefer server completed + local unsynced/not-yet-reflected verified cards.
   const verifiedCount = Math.max(completedCount || 0, localVerifiedCount);
 
   const unsyncedVerified = useMemo(
-    () => Object.values(localVerified || {}).filter((row) => row.verified && !row.synced),
+    () => Object.values(localVerified || {}).filter((row) => row.verified && !row.finalized),
     [localVerified]
   );
 
   const openTask = (task) => {
     const existing = localVerified?.[task.part_number];
-    setSelected(task);
-    setPhysicalQty(existing ? String(existing.physicalQty) : '');
+    setSelected({
+      ...task,
+      revealedSystemQty: revealedSystemQty(task, existing),
+    });
+    setPhysicalQty(existing ? String(existing.physicalQty) : (task.physical_quantity != null && task.count_saved ? String(task.physical_quantity) : ''));
     setDamageQty(existing?.damageQty ? String(existing.damageQty) : '');
     setLocation(existing?.location || (task.loc && task.loc !== '-' ? task.loc : ''));
     setRemark(existing?.remark || '');
+    setCorrectionReason('');
   };
 
   const closeModal = () => {
@@ -207,6 +251,7 @@ export default function AutoPerpetualScreen({
     setDamageQty('');
     setLocation('');
     setRemark('');
+    setCorrectionReason('');
   };
 
   const handleSave = async () => {
@@ -215,9 +260,21 @@ export default function AutoPerpetualScreen({
       Alert.alert('Physical Quantity', 'Enter a valid physical quantity.');
       return;
     }
+    const existing = localVerified?.[selected.part_number];
+    const isEdit = Boolean(existing?.verified || selected.count_saved);
+    const finalized = Boolean(existing?.finalized || selected.quantity_finalized);
+    if (finalized) {
+      Alert.alert('Locked', 'Quantity editing is locked after Final Submit.');
+      return;
+    }
+    if (isEdit && existing?.physicalQty != null && numberValue(physicalQty) !== numberValue(existing.physicalQty) && !String(correctionReason || '').trim()) {
+      Alert.alert('Correction reason', 'Enter a reason before changing the counted quantity.');
+      return;
+    }
     setSaving(true);
     try {
-      const diff = calculateVerification(selected.system_qty, physicalQty, 0);
+      const systemQty = revealedSystemQty(selected, existing);
+      const diff = systemQty == null ? { status: '', differenceQty: 0 } : calculateVerification(systemQty, physicalQty, 0);
       await onSaveLocal({
         task: selected,
         physicalQty: numberValue(physicalQty),
@@ -226,6 +283,8 @@ export default function AutoPerpetualScreen({
         remark: remark.trim(),
         status: diff.status,
         differenceQty: diff.differenceQty,
+        correctionReason: String(correctionReason || '').trim(),
+        isEdit,
       });
       closeModal();
     } finally {
@@ -233,61 +292,83 @@ export default function AutoPerpetualScreen({
     }
   };
 
+  const confirmSubmit = () => {
+    Alert.alert(
+      'Final Submit',
+      `Submit ${unsyncedVerified.length} saved part(s)? The latest saved quantity on the server becomes the final Physical Quantity.`,
+      [
+        { text: 'Cancel', style: 'cancel' },
+        { text: 'Submit', onPress: onSubmitVerified },
+      ]
+    );
+  };
+
+  const selectedLocal = selected ? localVerified?.[selected.part_number] : null;
+  const selectedRevealed = Boolean(selectedLocal?.verified || selected?.count_saved);
+  const selectedFinalized = Boolean(selectedLocal?.finalized || selected?.quantity_finalized);
+
   return (
-    <View style={styles.flex}>
-      <Header title="Auto Perpetual" onBack={onBack} action="Refresh" onAction={onRefresh} />
-      <SyncStatusBanner status={syncStatus} />
-      <ScrollView
-        style={styles.flex}
-        contentContainerStyle={styles.content}
-        keyboardShouldPersistTaps="handled"
-      >
-        <Text style={styles.sectionLabel}>TODAY&apos;S SESSION</Text>
-        <View style={styles.sessionCard}>
-          <Text style={styles.sessionId}>{sessionId || 'Loading session…'}</Text>
-          <Text style={styles.sessionSub}>Backend daily Auto Perpetual session (IST)</Text>
+    <ScreenBackground>
+      <View style={styles.flex}>
+        <Header title="Auto Perpetual" onBack={onBack} action="Refresh" onAction={onRefresh} />
+        <SyncStatusBanner status={syncStatus} />
+        <ScrollView
+          style={styles.flex}
+          contentContainerStyle={styles.content}
+          keyboardShouldPersistTaps="handled"
+        >
+          <Text style={styles.sectionLabel}>TODAY&apos;S SESSION</Text>
+          <View style={styles.sessionCard}>
+            <Text style={styles.sessionId}>{sessionId || 'Loading session…'}</Text>
+            <Text style={styles.sessionSub}>Backend daily Auto Perpetual session (IST)</Text>
+          </View>
+
+          <ProgressBar verified={verifiedCount} total={totalAssigned || tasks.length} />
+
+          <Text style={styles.sectionLabel}>ASSIGNED PARTS ({tasks.length})</Text>
+          {busy && !tasks.length ? <ActivityIndicator color={BLUE} style={{ marginVertical: 20 }} /> : null}
+          {!busy && tasks.length === 0 ? <Empty text="No Auto Perpetual tasks for today." /> : null}
+          {tasks.map((task) => (
+            <TaskCard
+              key={`${task.part_number}-${task.id || ''}`}
+              task={task}
+              local={localVerified?.[task.part_number]}
+              onPress={() => openTask(task)}
+            />
+          ))}
+        </ScrollView>
+
+        <View style={styles.stickyBar}>
+          <PrimaryButton
+            title={`Final Submit (${unsyncedVerified.length})`}
+            onPress={confirmSubmit}
+            busy={submitting}
+            disabled={!unsyncedVerified.length}
+          />
         </View>
 
-        <ProgressBar verified={verifiedCount} total={totalAssigned || tasks.length} />
-
-        <Text style={styles.sectionLabel}>ASSIGNED PARTS ({tasks.length})</Text>
-        {busy && !tasks.length ? <ActivityIndicator color={BLUE} style={{ marginVertical: 20 }} /> : null}
-        {!busy && tasks.length === 0 ? <Empty text="No Auto Perpetual tasks for today." /> : null}
-        {tasks.map((task) => (
-          <TaskCard
-            key={`${task.part_number}-${task.id || ''}`}
-            task={task}
-            local={localVerified?.[task.part_number]}
-            onPress={() => openTask(task)}
-          />
-        ))}
-      </ScrollView>
-
-      <View style={styles.stickyBar}>
-        <PrimaryButton
-          title={`Submit Verified Parts (${unsyncedVerified.length})`}
-          onPress={onSubmitVerified}
-          busy={submitting}
-          disabled={!unsyncedVerified.length}
+        <VerifyModal
+          visible={Boolean(selected)}
+          task={selected ? { ...selected, revealedSystemQty: revealedSystemQty(selected, selectedLocal) } : null}
+          physicalQty={physicalQty}
+          setPhysicalQty={setPhysicalQty}
+          damageQty={damageQty}
+          setDamageQty={setDamageQty}
+          location={location}
+          setLocation={setLocation}
+          remark={remark}
+          setRemark={setRemark}
+          correctionReason={correctionReason}
+          setCorrectionReason={setCorrectionReason}
+          isEdit={selectedRevealed}
+          revealed={selectedRevealed}
+          finalized={selectedFinalized}
+          onClose={closeModal}
+          onSave={handleSave}
+          busy={saving}
         />
       </View>
-
-      <VerifyModal
-        visible={Boolean(selected)}
-        task={selected}
-        physicalQty={physicalQty}
-        setPhysicalQty={setPhysicalQty}
-        damageQty={damageQty}
-        setDamageQty={setDamageQty}
-        location={location}
-        setLocation={setLocation}
-        remark={remark}
-        setRemark={setRemark}
-        onClose={closeModal}
-        onSave={handleSave}
-        busy={saving}
-      />
-    </View>
+    </ScreenBackground>
   );
 }
 
@@ -332,7 +413,7 @@ const styles = StyleSheet.create({
   partNo: { color: DARK, fontSize: 14, fontWeight: '900' },
   partName: { marginTop: 3, color: MUTED, fontSize: 11 },
   meta: { marginTop: 7, color: MUTED, fontSize: 11 },
-  verifiedMeta: { marginTop: 10, flexDirection: 'row', justifyContent: 'space-between', alignItems: 'center' },
+  verifiedMeta: { marginTop: 10, flexDirection: 'row', justifyContent: 'space-between', alignItems: 'center', flexWrap: 'wrap', gap: 6 },
   verifiedLine: { color: SUCCESS, fontSize: 12, fontWeight: '800' },
   stickyBar: {
     position: 'absolute',
