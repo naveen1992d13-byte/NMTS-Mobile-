@@ -13,7 +13,7 @@ import {
   View,
 } from 'react-native';
 import { BLUE, BORDER, CARD_SOLID, DARK, MUTED, SUCCESS, WARNING, DANGER } from '../theme';
-import { calculateVerification, numberValue } from '../utils/stockHelpers';
+import { calculateVerification, isActionableAutoTask, numberValue } from '../utils/stockHelpers';
 import { Empty, Header, PrimaryButton, SecondaryButton, StatusPill, SyncStatusBanner } from './ui';
 import { ScreenBackground } from './ScreenBackground';
 
@@ -84,15 +84,38 @@ function TaskCard({ task, local, onPress, readOnly }) {
   );
 }
 
-function SessionCard({ session, onOpen, onReaudit }) {
-  const status = session.card_status || (session.is_today ? 'TODAY' : session.pending_count > 0 ? 'EXPIRED' : 'COMPLETED');
+function sessionDisplayStatus(session) {
+  const pending = Math.max(0, numberValue(session?.pending_count));
+  const assigned = numberValue(session?.assigned_count);
+  if (session?.is_today || session?.card_status === 'TODAY') {
+    if (assigned > 0 && pending === 0) return 'COMPLETED';
+    return 'TODAY';
+  }
+  if (session?.card_status) return session.card_status;
+  return pending > 0 ? 'EXPIRED' : 'COMPLETED';
+}
+
+function SessionCard({ session, onOpenToday, onReaudit }) {
+  const status = sessionDisplayStatus(session);
   const pending = Math.max(0, numberValue(session.pending_count));
   const assigned = numberValue(session.assigned_count);
   const verified = numberValue(session.verified_count);
-  const showReaudit = Boolean(session.reaudit_available && onReaudit);
+  const expiredPending = status === 'EXPIRED' || Boolean(session.reaudit_available && status !== 'TODAY' && status !== 'COMPLETED');
+  const showReaudit = expiredPending && Boolean(onReaudit);
+  const pressable = (status === 'TODAY' && pending > 0) || expiredPending;
+
+  const handlePress = () => {
+    if (expiredPending) {
+      onReaudit?.(session);
+      return;
+    }
+    if (status === 'TODAY' && pending > 0) {
+      onOpenToday?.(session);
+    }
+  };
 
   return (
-    <TouchableOpacity style={styles.sessionCard} onPress={() => onOpen?.(session)} activeOpacity={0.85}>
+    <TouchableOpacity style={styles.sessionCard} onPress={handlePress} activeOpacity={pressable ? 0.85 : 1}>
       <View style={styles.taskTopRow}>
         <Text style={styles.sessionId}>{session.session_id || session.audit_id || 'Session'}</Text>
         <StatusPill value={status} />
@@ -278,10 +301,14 @@ export default function AutoPerpetualScreen({
     [sessions]
   );
 
+  const actionableTasks = useMemo(
+    () => (tasks || []).filter((task) => isActionableAutoTask(task, localVerified?.[task.part_number])),
+    [tasks, localVerified]
+  );
   const totalAssigned = assignedCount || tasks.length;
   const localVerifiedCount = Object.keys(localVerified || {}).length;
   const verifiedCount = Math.max(completedCount || 0, localVerifiedCount);
-  const sessionLocked = Boolean(readOnly && !reaudit);
+  const sessionLocked = false;
 
   const unsyncedVerified = useMemo(
     () => Object.values(localVerified || {}).filter((row) => row.verified && !row.finalized),
@@ -312,8 +339,8 @@ export default function AutoPerpetualScreen({
 
   const handleSave = async () => {
     if (!selected) return;
-    if (sessionLocked || selected.quantity_finalized) {
-      Alert.alert('Locked', 'Edit, Save and Final Submit are disabled for this view.');
+    if (selected.quantity_finalized) {
+      Alert.alert('Locked', 'Quantity editing is locked after Final Submit.');
       return;
     }
     if (physicalQty === '' || numberValue(physicalQty) < 0) {
@@ -353,10 +380,6 @@ export default function AutoPerpetualScreen({
   };
 
   const confirmSubmit = () => {
-    if (sessionLocked) {
-      Alert.alert('Locked', 'Final Submit is disabled for expired sessions. Use Re-audit for pending items.');
-      return;
-    }
     Alert.alert(
       'Final Submit',
       `Submit ${unsyncedVerified.length} saved part(s)? The latest saved quantity on the server becomes the final Physical Quantity.`,
@@ -397,7 +420,11 @@ export default function AutoPerpetualScreen({
               <Text style={styles.sectionLabel}>TODAY&apos;S SESSION{today ? ` · ${today}` : ''}</Text>
               {busy && !sessions.length ? <ActivityIndicator color={BLUE} style={{ marginVertical: 20 }} /> : null}
               {todayCreated && todaySession ? (
-                <SessionCard session={todaySession} onOpen={(row) => onOpenSession?.(row, 'view')} />
+                <SessionCard
+                  session={todaySession}
+                  onOpenToday={(row) => onOpenSession?.(row, 'view')}
+                  onReaudit={undefined}
+                />
               ) : (
                 <View style={styles.noticeCard}>
                   <Text style={styles.noticeText}>{todayMessage || TODAY_SESSION_NOT_CREATED}</Text>
@@ -410,8 +437,8 @@ export default function AutoPerpetualScreen({
                 <SessionCard
                   key={`${row.session_id || ''}-${row.allocation_date || ''}`}
                   session={row}
-                  onOpen={(item) => onOpenSession?.(item, 'view')}
-                  onReaudit={row.reaudit_available ? (item) => onOpenSession?.(item, 'reaudit') : undefined}
+                  onOpenToday={undefined}
+                  onReaudit={(item) => onOpenSession?.(item, 'reaudit')}
                 />
               ))}
             </>
@@ -424,25 +451,25 @@ export default function AutoPerpetualScreen({
                 </View>
                 <Text style={styles.sessionSub}>
                   {selectedSession?.allocation_date || today || ''}
-                  {reaudit ? ' · Pending items only' : sessionLocked ? ' · Read-only' : ' · Backend daily Auto Perpetual session (IST)'}
+                  {reaudit ? ' · Pending items only · live system qty after Save' : ' · Actionable items only'}
                 </Text>
               </View>
 
               <ProgressBar verified={verifiedCount} total={totalAssigned || tasks.length} />
 
               <Text style={styles.sectionLabel}>
-                {reaudit ? `PENDING PARTS (${tasks.length})` : `ASSIGNED PARTS (${tasks.length})`}
+                {reaudit ? `PENDING PARTS (${actionableTasks.length})` : `ACTIONABLE PARTS (${actionableTasks.length})`}
               </Text>
-              {busy && !tasks.length ? <ActivityIndicator color={BLUE} style={{ marginVertical: 20 }} /> : null}
-              {!busy && tasks.length === 0 ? (
-                <Empty text={reaudit ? 'No pending items to re-audit.' : 'No Auto Perpetual tasks in this session.'} />
+              {busy && !actionableTasks.length ? <ActivityIndicator color={BLUE} style={{ marginVertical: 20 }} /> : null}
+              {!busy && actionableTasks.length === 0 ? (
+                <Empty text={reaudit ? 'No pending items to re-audit.' : 'No actionable Auto Perpetual parts. Session is complete.'} />
               ) : null}
-              {tasks.map((task) => (
+              {actionableTasks.map((task) => (
                 <TaskCard
                   key={`${task.part_number}-${task.id || ''}`}
                   task={task}
                   local={localVerified?.[task.part_number]}
-                  readOnly={sessionLocked}
+                  readOnly={false}
                   onPress={() => openTask(task)}
                 />
               ))}

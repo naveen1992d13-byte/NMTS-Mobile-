@@ -11,7 +11,7 @@ function load(rel, names) {
   return sandbox.module.exports;
 }
 
-const { isAgingStock, parseAgingDays } = load('src/utils/stockHelpers.js', ['isAgingStock', 'parseAgingDays']);
+const { isAgingStock, parseAgingDays, isActionableAutoTask } = load('src/utils/stockHelpers.js', ['isAgingStock', 'parseAgingDays', 'isActionableAutoTask']);
 
 function revealedSystemQty(task, local) {
   if (local?.finalized || local?.verified) {
@@ -38,8 +38,16 @@ assert.ok(autoScreen.includes('Blind Physical Count'), 'blind count copy present
 assert.ok(autoScreen.includes("Today's session is not created yet"), 'today-not-created copy present');
 assert.ok(autoScreen.includes('PREVIOUS SESSIONS'), 'collapsed previous session cards present');
 assert.ok(autoScreen.includes('Re-audit'), 're-audit control present');
-assert.ok(autoScreen.includes('Expired session (read-only)'), 'expired read-only copy present');
+assert.ok(autoScreen.includes('onOpenToday={undefined}'), 'expired cards do not open historical read-only list');
+assert.ok(autoScreen.includes("onOpenSession?.(item, 'reaudit')"), 'expired card invokes re-audit');
 assert.ok(!autoScreen.includes("Yesterday's session"), 'does not treat yesterday as today');
+assert.ok(autoScreen.includes('ACTIONABLE PARTS'), 'actionable list copy present');
+
+assert.strictEqual(isActionableAutoTask({ status: 'pending', quantity_finalized: false }), true, 'pending is actionable');
+assert.strictEqual(isActionableAutoTask({ status: 'pending', quantity_finalized: false, count_saved: true }), true, 'saved-not-submitted remains');
+assert.strictEqual(isActionableAutoTask({ status: 'completed', quantity_finalized: true }), false, 'submitted disappears');
+assert.strictEqual(isActionableAutoTask({ status: 'pending' }, { finalized: true }), false, 'local finalized disappears');
+assert.strictEqual(isActionableAutoTask({ status: 'pending', system_qty: 0, quantity_finalized: false }), true, 'zero live qty still shown');
 const avail = fs.readFileSync(path.join(__dirname, '..', 'src/components/StockAvailabilityScreen.js'), 'utf8');
 assert.ok(avail.includes('VoiceTypeButton'), 'parts search has Voice Type');
 assert.ok(avail.includes('onAppend={appendVoice}'), 'parts search appends without search');

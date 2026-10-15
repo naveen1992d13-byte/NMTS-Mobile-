@@ -99,6 +99,7 @@ import {
   mapStockRow,
   calculateVerification,
   numberValue,
+  isActionableAutoTask,
 } from './src/utils/stockHelpers';
 import { BLUE, BG, BORDER, CARD_SOLID, DANGER, DARK, MUTED, NEON_BLUE, NEON_CYAN, NEON_GREEN, NEON_YELLOW, SUCCESS, WARNING } from './src/theme';
 import AutoPerpetualScreen from './src/components/AutoPerpetualScreen';
@@ -399,7 +400,7 @@ export default function App() {
   }, []);
 
   const applyAutoTaskPayload = useCallback((data, { resetLocal = false } = {}) => {
-    const tasks = data?.tasks || [];
+    const tasks = (data?.tasks || []).filter((task) => isActionableAutoTask(task));
     setAutoTasks(tasks);
     if (data?.session_id) setAutoSessionId(data.session_id);
     setAutoAssignedCount(numberValue(data?.assigned_count || tasks.length || 0));
@@ -472,18 +473,21 @@ export default function App() {
   const loadAutoSessionTasks = useCallback(async (session, mode = 'view', { resetLocal = false } = {}) => {
     setAutoBusy(true);
     try {
+      const isToday = Boolean(session?.is_today || session?.card_status === 'TODAY');
+      const apiMode = 'reaudit';
       const data = await getAutoPerpetualTasks({
         sessionId: session?.session_id,
-        mode,
+        mode: apiMode,
       });
+      const openedToday = Boolean(data?.is_today) || isToday;
       setAutoSelectedSession({
         ...(session || {}),
         session_id: data?.session_id || session?.session_id,
         allocation_date: data?.allocation_date || session?.allocation_date,
         card_status: session?.card_status,
-        is_today: Boolean(data?.is_today),
+        is_today: openedToday,
       });
-      setAutoViewMode(mode === 'reaudit' ? 'reaudit' : 'view');
+      setAutoViewMode(mode === 'reaudit' && !openedToday ? 'reaudit' : 'view');
       applyAutoTaskPayload(data, { resetLocal });
     } catch (error) {
       Alert.alert('Auto Perpetual', friendlyError(error));
@@ -1411,13 +1415,16 @@ export default function App() {
         .filter(([, row]) => row.verified && !row.finalized)
         .map(([part]) => part);
       await finalizeAutoCounts(partNumbers, autoSessionId);
+      const submitted = new Set(partNumbers);
       setAutoLocalVerified((current) => {
-        const next = { ...current };
-        Object.keys(next).forEach((part) => {
-          next[part] = { ...next[part], synced: true, finalized: true };
+        const next = {};
+        Object.entries(current || {}).forEach(([part, row]) => {
+          if (submitted.has(part)) return;
+          next[part] = { ...row, synced: true };
         });
         return next;
       });
+      setAutoTasks((current) => (current || []).filter((task) => !submitted.has(cleanPartNumber(task.part_number))));
       await loadAutoTasks();
       if (stillPending > 0) {
         Alert.alert('Partial Sync', `${stillPending} record(s) still pending. They will retry automatically.`);

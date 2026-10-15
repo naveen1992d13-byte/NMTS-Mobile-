@@ -71,6 +71,15 @@ export function numberValue(value) {
   return Number.isFinite(n) ? n : 0;
 }
 
+/** Mobile Auto Perpetual actionable list: hide Final Submitted items, keep Saved-only. */
+export function isActionableAutoTask(task, local) {
+  if (local?.finalized) return false;
+  if (task?.quantity_finalized) return false;
+  const status = String(task?.status || '').toLowerCase();
+  if (status === 'completed' || status === 'verified') return false;
+  return true;
+}
+
 export function mapStockRow(row = {}) {
   // Prefer Product Hub numeric on-hand (available_qty_number) so Mobile qty matches Hub.
   const availableQty = numberValue(
