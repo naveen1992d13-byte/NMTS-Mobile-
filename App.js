@@ -8,6 +8,7 @@ import {
   findNodeHandle,
   FlatList,
   Image,
+  Dimensions,
   KeyboardAvoidingView,
   Platform,
   SafeAreaView,
@@ -123,6 +124,11 @@ import {
 
 const CURRENT_VERSION_CODE = Constants.expoConfig?.android?.versionCode || 1;
 const CURRENT_VERSION_NAME = Constants.expoConfig?.version || '1.0.0';
+// Capture once. Do not subscribe to dimension changes — those listeners
+// re-layout Pairing and cause the sideways jump seen when the keyboard
+// opens, closes, or switches between text and numeric IMEs.
+const PAIR_SCREEN = Dimensions.get('screen');
+const PAIR_WINDOW = Dimensions.get('window');
 
 function friendlyError(error) {
   if (error instanceof ApiError) return error.message;
@@ -1974,68 +1980,83 @@ export default function App() {
   );
 }
 
-function PairScreen(props) {
+function PairForm(props) {
   return (
-    <View style={styles.flex}>
+    <ScrollView
+      style={styles.pairScroll}
+      contentContainerStyle={styles.pairPage}
+      keyboardShouldPersistTaps="handled"
+      keyboardDismissMode="on-drag"
+    >
+      <Image source={require('./assets/sleeping-stock-logo.png')} style={styles.brandLogo} resizeMode="contain" />
+      <Text style={styles.appTitle}>Sleeping Stock Mobile</Text>
+      <Text style={styles.appSub}>PAIR THIS DEVICE</Text>
+      {props.branchTransferred ? (
+        <View style={styles.transferBanner}>
+          <Text style={styles.transferBannerTitle}>BRANCH TRANSFERRED</Text>
+          <Text style={styles.transferBannerText}>{BRANCH_TRANSFERRED_MESSAGE}</Text>
+        </View>
+      ) : null}
+      <View style={styles.card}>
+        <Field label="Your Name" value={props.userName} onChangeText={props.setUserName} />
+        <Field
+          label="Mobile Number"
+          value={props.mobileNumber}
+          onChangeText={props.setMobileNumber}
+          keyboardType="phone-pad"
+        />
+        <Text style={styles.qrInfo}>
+          The NMTS website QR contains a one-time pairing code and secure server URL. A new Mobile User ID is created after
+          first pairing; Re-pair keeps the same ID. Manual pairing code always uses Production.
+        </Text>
+        <PrimaryButton title="Scan NMTS Pairing QR" onPress={props.onScanQr} busy={props.busy} />
+        <TouchableOpacity style={{ marginTop: 14 }} onPress={() => props.setShowManual(!props.showManual)}>
+          <Text style={styles.pendingAction}>Enter Code Manually</Text>
+        </TouchableOpacity>
+        {props.showManual ? (
+          <View style={{ marginTop: 14 }}>
+            <Field
+              label="Website pairing code"
+              value={props.pairingCode}
+              onChangeText={(value) => props.setPairingCode(String(value || '').toUpperCase())}
+              autoCapitalize="characters"
+            />
+            <Field
+              label="Re-pair Mobile User ID (optional)"
+              value={props.mobileUserId}
+              onChangeText={(value) => props.setMobileUserId(String(value || '').toUpperCase())}
+              autoCapitalize="characters"
+            />
+            <PrimaryButton title="Pair with Code" onPress={props.onManualPair} busy={props.busy} />
+          </View>
+        ) : null}
+        {!!props.mobileUserId && !props.showManual && <Text style={styles.detectedUser}>Detected User: {props.mobileUserId}</Text>}
+      </View>
+    </ScrollView>
+  );
+}
+
+function PairScreen(props) {
+  const form = <PairForm {...props} />;
+  return (
+    <View style={styles.pairRoot} collapsable={false}>
       <Image
         source={require('./assets/login-background.png')}
         style={styles.loginBackground}
         resizeMode="cover"
         blurRadius={18}
+        pointerEvents="none"
       />
-      <View style={styles.loginDim} />
-      <KeyboardAvoidingView
-        style={styles.flex}
-        behavior={Platform.OS === 'ios' ? 'padding' : 'height'}
-        keyboardVerticalOffset={Platform.OS === 'ios' ? 0 : 18}
-      >
-        <ScrollView contentContainerStyle={styles.pairPage} keyboardShouldPersistTaps="handled" keyboardDismissMode="interactive">
-          <Image source={require('./assets/sleeping-stock-logo.png')} style={styles.brandLogo} resizeMode="contain" />
-          <Text style={styles.appTitle}>Sleeping Stock Mobile</Text>
-          <Text style={styles.appSub}>PAIR THIS DEVICE</Text>
-          {props.branchTransferred ? (
-            <View style={styles.transferBanner}>
-              <Text style={styles.transferBannerTitle}>BRANCH TRANSFERRED</Text>
-              <Text style={styles.transferBannerText}>{BRANCH_TRANSFERRED_MESSAGE}</Text>
-            </View>
-          ) : null}
-          <View style={styles.card}>
-            <Field label="Your Name" value={props.userName} onChangeText={props.setUserName} />
-            <Field
-              label="Mobile Number"
-              value={props.mobileNumber}
-              onChangeText={props.setMobileNumber}
-              keyboardType="phone-pad"
-            />
-            <Text style={styles.qrInfo}>
-              The NMTS website QR contains a one-time pairing code and secure server URL. A new Mobile User ID is created after
-              first pairing; Re-pair keeps the same ID. Manual pairing code always uses Production.
-            </Text>
-            <PrimaryButton title="Scan NMTS Pairing QR" onPress={props.onScanQr} busy={props.busy} />
-            <TouchableOpacity style={{ marginTop: 14 }} onPress={() => props.setShowManual(!props.showManual)}>
-              <Text style={styles.pendingAction}>Enter Code Manually</Text>
-            </TouchableOpacity>
-            {props.showManual ? (
-              <View style={{ marginTop: 14 }}>
-                <Field
-                  label="Website pairing code"
-                  value={props.pairingCode}
-                  onChangeText={(value) => props.setPairingCode(String(value || '').toUpperCase())}
-                  autoCapitalize="characters"
-                />
-                <Field
-                  label="Re-pair Mobile User ID (optional)"
-                  value={props.mobileUserId}
-                  onChangeText={(value) => props.setMobileUserId(String(value || '').toUpperCase())}
-                  autoCapitalize="characters"
-                />
-                <PrimaryButton title="Pair with Code" onPress={props.onManualPair} busy={props.busy} />
-              </View>
-            ) : null}
-            {!!props.mobileUserId && !props.showManual && <Text style={styles.detectedUser}>Detected User: {props.mobileUserId}</Text>}
-          </View>
-        </ScrollView>
-      </KeyboardAvoidingView>
+      <View style={styles.loginDim} pointerEvents="none" />
+      {Platform.OS === 'ios' ? (
+        <KeyboardAvoidingView style={styles.flex} behavior="padding">
+          {form}
+        </KeyboardAvoidingView>
+      ) : (
+        <View style={styles.flex} collapsable={false}>
+          {form}
+        </View>
+      )}
     </View>
   );
 }
@@ -2586,9 +2607,35 @@ const styles = StyleSheet.create({
   center: { alignItems: 'center', justifyContent: 'center' },
   offline: { backgroundColor: '#fff2c7', paddingVertical: 7, alignItems: 'center' },
   offlineText: { color: '#7b5b00', fontSize: 12, fontWeight: '700' },
-  pairPage: { flexGrow: 1, justifyContent: 'center', padding: 24, paddingBottom: 56 },
-  loginBackground: { ...StyleSheet.absoluteFillObject, width: '100%', height: '100%' },
-  loginDim: { ...StyleSheet.absoluteFillObject, backgroundColor: 'rgba(5,7,6,0.70)' },
+  pairRoot: { flex: 1, width: PAIR_WINDOW.width, overflow: 'hidden' },
+  pairScroll: { flex: 1, width: PAIR_WINDOW.width, alignSelf: 'stretch' },
+  pairPage: {
+    flexGrow: 1,
+    width: PAIR_WINDOW.width,
+    maxWidth: PAIR_WINDOW.width,
+    alignSelf: 'stretch',
+    alignItems: 'stretch',
+    justifyContent: 'center',
+    paddingHorizontal: 24,
+    paddingTop: 24,
+    paddingBottom: 56,
+    minHeight: PAIR_WINDOW.height,
+  },
+  loginBackground: {
+    position: 'absolute',
+    top: 0,
+    left: 0,
+    width: PAIR_SCREEN.width,
+    height: PAIR_SCREEN.height,
+  },
+  loginDim: {
+    position: 'absolute',
+    top: 0,
+    left: 0,
+    width: PAIR_SCREEN.width,
+    height: PAIR_SCREEN.height,
+    backgroundColor: 'rgba(5,7,6,0.70)',
+  },
   transferBanner: {
     marginBottom: 16,
     padding: 16,
