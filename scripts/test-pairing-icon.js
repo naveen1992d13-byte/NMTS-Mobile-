@@ -10,9 +10,9 @@ const appJs = fs.readFileSync(path.join(root, 'App.js'), 'utf8');
 const envJs = fs.readFileSync(path.join(root, 'src/config/env.js'), 'utf8');
 const easIgnore = fs.readFileSync(path.join(root, '.easignore'), 'utf8');
 
-assert.strictEqual(appJson.expo.version, '1.5.0');
-assert.strictEqual(appJson.expo.android.versionCode, 32);
-assert.strictEqual(pkg.version, '1.5.0');
+assert.strictEqual(appJson.expo.version, '1.5.1');
+assert.strictEqual(appJson.expo.android.versionCode, 33);
+assert.strictEqual(pkg.version, '1.5.1');
 assert.strictEqual(appJson.expo.name, 'Sleeping Stock');
 assert.ok(appJson.expo.android.adaptiveIcon.monochromeImage);
 
@@ -24,10 +24,12 @@ assert.strictEqual(
   appJson.expo.android.adaptiveIcon.backgroundImage,
   './assets/source/adaptive-icon-background.png'
 );
+assert.strictEqual(appJson.expo.android.adaptiveIcon.backgroundColor, '#05070d');
 assert.strictEqual(appJson.expo.icon, './assets/icon.png');
 assert.strictEqual(appJson.expo.splash.image, './assets/splash-logo.png');
-assert.strictEqual(appJson.expo.android.icon, './assets/source/sleeping-stock-app-icon-safe-zone.png');
+assert.strictEqual(appJson.expo.android.icon, './assets/icon.png');
 assert.strictEqual(appJson.expo.android.softwareKeyboardLayoutMode, 'resize');
+assert.ok(appJson.expo.plugins.includes('./plugins/withAdaptiveLauncherIcon.js'));
 
 const notifPlugin = appJson.expo.plugins.find((p) => Array.isArray(p) && p[0] === 'expo-notifications');
 assert.strictEqual(notifPlugin[1].icon, './assets/notification-icon.png');
@@ -65,8 +67,9 @@ assert.ok(envJs.includes('TESTING_API_BASE_URL'));
 assert.ok(easIgnore.includes('assets/source/previews'));
 
 const fg = fs.readFileSync(path.join(root, 'assets/source/adaptive-icon-foreground-logo-only.png'));
-assert.ok(fg.length > 400000, 'new foreground should be larger than the previous 276KB logo');
+assert.ok(fg.length > 100000, 'safe-zone foreground PNG should be non-trivial');
 const pngSig = Buffer.from([0x89, 0x50, 0x4e, 0x47]);
 assert.ok(fg.slice(0, 4).equals(pngSig), 'foreground is a PNG');
+assert.ok(fs.existsSync(path.join(root, 'plugins/withAdaptiveLauncherIcon.js')));
 
 console.log('pairing-icon: pass');

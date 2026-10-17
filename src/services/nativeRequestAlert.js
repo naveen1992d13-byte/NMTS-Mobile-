@@ -12,6 +12,10 @@ export function toRequestAlertData(payload = {}) {
   const totalQuantity =
     payload.totalQuantity ?? payload.total_quantity ?? payload.total_qty ?? 0;
   const type = String(payload.type || 'branch_request');
+  const ringDeadlineAt = String(payload.ringDeadlineAt || payload.ring_deadline_at || '');
+  const ringTtlSeconds = String(
+    payload.ringTtlSeconds ?? payload.ring_ttl_seconds ?? '50'
+  );
   return {
     ...payload,
     type,
@@ -30,6 +34,10 @@ export function toRequestAlertData(payload = {}) {
     total_quantity: totalQuantity,
     round: payload.round,
     picked_by_name: payload.pickedByName || payload.picked_by_name || '',
+    ringDeadlineAt,
+    ring_deadline_at: ringDeadlineAt,
+    ringTtlSeconds,
+    ring_ttl_seconds: ringTtlSeconds,
   };
 }
 

@@ -155,7 +155,7 @@ if (read('src/services/nativeRequestAlert.js').includes('stopRinging') && app.in
 if (app.includes('stopRinging(group.request_group_key') || app.includes('stopRinging(alert.request_group_key')) {
   pass('Pick/Reject handlers call stopRinging');
 } else fail('Pick/Reject handlers missing stopRinging');
-if (expo.version === '1.5.0' && expo.android.versionCode === 32) pass('APK version is 1.5.0 / versionCode 32');
+if (expo.version === '1.5.1' && expo.android.versionCode === 33) pass('APK version is 1.5.1 / versionCode 33');
 else fail('android versionCode/version not bumped');
 if (app.includes('asOwnedPickedRequest(') && requestAlert.includes('export function asOwnedPickedRequest')) {
   pass('post-Pick selected request is forced to owned/editable');

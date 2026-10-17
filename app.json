@@ -2,7 +2,7 @@
   "expo": {
     "name": "Sleeping Stock",
     "slug": "sleeping-stock-mobile",
-    "version": "1.5.0",
+    "version": "1.5.1",
     "orientation": "portrait",
     "userInterfaceStyle": "dark",
     "newArchEnabled": true,
@@ -14,9 +14,9 @@
     },
     "android": {
       "package": "in.sleepingstock.mobile",
-      "versionCode": 32,
+      "versionCode": 33,
       "googleServicesFile": "./google-services.json",
-      "icon": "./assets/source/sleeping-stock-app-icon-safe-zone.png",
+      "icon": "./assets/icon.png",
       "permissions": [
         "CAMERA",
         "RECORD_AUDIO",
@@ -69,7 +69,8 @@
         }
       ],
       "./plugins/withInsistentRequestNotifications.js",
-      "./plugins/withNativeRequestAlert.js"
+      "./plugins/withNativeRequestAlert.js",
+      "./plugins/withAdaptiveLauncherIcon.js"
     ],
     "extra": {
       "eas": {

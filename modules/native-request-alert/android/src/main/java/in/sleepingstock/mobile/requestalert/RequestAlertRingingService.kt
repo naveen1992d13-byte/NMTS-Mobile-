@@ -11,7 +11,9 @@ import android.content.pm.ServiceInfo
 import android.media.AudioAttributes
 import android.media.MediaPlayer
 import android.os.Build
+import android.os.Handler
 import android.os.IBinder
+import android.os.Looper
 import android.os.PowerManager
 import androidx.core.app.NotificationCompat
 import androidx.core.content.ContextCompat
@@ -19,16 +21,19 @@ import kotlin.concurrent.thread
 
 /**
  * Foreground media-playback service that loops the custom request sound
- * until Pick, Reject, request_picked, or a server-status invalidation.
+ * until Pick, Reject, request_picked, request_closed, server-status
+ * invalidation, or the server ring TTL (default 50s).
  * START_NOT_STICKY: the OS will not auto-restart a killed FGS. A persisted
  * alert is restored + validated if this service is created again.
  *
- * There is NO maximum ring duration. The alert rings until Pick or Reject.
+ * There IS a maximum ring duration = server ring TTL (default 50s).
  */
 class RequestAlertRingingService : Service() {
   private var mediaPlayer: MediaPlayer? = null
   private var wakeLock: PowerManager.WakeLock? = null
   private var currentPayload: RequestAlertPayload? = null
+  private val mainHandler = Handler(Looper.getMainLooper())
+  private var ringTtlRunnable: Runnable? = null
 
   override fun onBind(intent: Intent?): IBinder? = null
 
@@ -88,6 +93,7 @@ class RequestAlertRingingService : Service() {
     }
     acquireWakeLock()
     startLoopingSound()
+    scheduleRingDeadline(payload)
     thread {
       val valid = RequestAlertApi.shouldKeepRinging(this, payload)
       if (valid == false) {
@@ -99,13 +105,37 @@ class RequestAlertRingingService : Service() {
   }
 
   override fun onTaskRemoved(rootIntent: Intent?) {
-    // Swiping the app must not stop the ring. Only Pick/Reject/request_picked stop it.
+    // Swiping the app must not stop the ring. Only Pick/Reject/request_picked/
+    // request_closed/TTL/server validation stop it.
   }
 
   override fun onDestroy() {
+    cancelRingDeadline()
     releasePlayer()
     releaseWakeLock()
     super.onDestroy()
+  }
+
+  private fun scheduleRingDeadline(payload: RequestAlertPayload) {
+    cancelRingDeadline()
+    val deadlineMs = payload.ringDeadlineMillis()
+    val delayMs = if (deadlineMs != null) {
+      (deadlineMs - System.currentTimeMillis()).coerceAtLeast(0L)
+    } else {
+      50_000L
+    }
+    RequestAlertLog.i("ring TTL scheduled delayMs=$delayMs deadlineMs=$deadlineMs")
+    val runnable = Runnable {
+      RequestAlertLog.i("ring TTL reached, stopping ring")
+      stopRingingInternal()
+    }
+    ringTtlRunnable = runnable
+    mainHandler.postDelayed(runnable, delayMs)
+  }
+
+  private fun cancelRingDeadline() {
+    ringTtlRunnable?.let { mainHandler.removeCallbacks(it) }
+    ringTtlRunnable = null
   }
 
   private fun startLoopingSound() {
@@ -246,6 +276,7 @@ class RequestAlertRingingService : Service() {
   }
 
   private fun stopRingingInternal() {
+    cancelRingDeadline()
     val id = currentPayload?.requestId.orEmpty()
     releasePlayer()
     releaseWakeLock()

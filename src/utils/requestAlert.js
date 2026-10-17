@@ -79,6 +79,10 @@ export function isRequestPickedPush(data) {
   return flattenExpoNotificationData(data).type === 'request_picked';
 }
 
+export function isRequestClosedPush(data) {
+  return flattenExpoNotificationData(data).type === 'request_closed';
+}
+
 export function isRequestTransferredPush(data) {
   return flattenExpoNotificationData(data).type === 'request_transferred';
 }

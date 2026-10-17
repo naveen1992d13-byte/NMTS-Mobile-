@@ -132,6 +132,7 @@ import {
   findRequestGroup,
   formatSlaRemaining,
   isBranchRequest,
+  isRequestClosedPush,
   isRequestPickedPush,
   isRequestTransferredPush,
   ownerName,
@@ -655,7 +656,7 @@ export default function App() {
       handleBranchTransferredRef.current?.();
       return;
     }
-    if (isRequestPickedPush(payload)) {
+    if (isRequestPickedPush(payload) || isRequestClosedPush(payload)) {
       const key = payload.request_group_key || payload.requestId || payload.request_number;
       stopRinging(key);
       stopRequestRingtone();
@@ -973,7 +974,14 @@ export default function App() {
           if (currentAlert) {
             const group = findRequestGroup(rows || [], currentAlert);
             const keepTransfer = currentAlert.type === 'request_transferred' && group?.accepted_by_me && requestStatus(group) === 'picked';
-            if (!group || (!canPickRequest(group) && !keepTransfer)) {
+            const deadlineRaw =
+              currentAlert.ring_deadline_at ||
+              currentAlert.ringDeadlineAt ||
+              currentAlert.data?.ring_deadline_at ||
+              currentAlert.data?.ringDeadlineAt;
+            const deadlineMs = deadlineRaw ? Date.parse(String(deadlineRaw)) : NaN;
+            const ringExpired = Number.isFinite(deadlineMs) && deadlineMs <= Date.now();
+            if (!group || (!canPickRequest(group) && !keepTransfer) || ringExpired) {
               stopRinging(currentAlert.request_group_key || currentAlert.request_number);
               stopRequestRingtone();
               incomingAlertRef.current = null;

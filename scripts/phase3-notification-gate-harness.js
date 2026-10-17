@@ -60,8 +60,8 @@ mustInclude(
   'native reject API path'
 );
 mustInclude('src/config/env.js', 'https://testing.sleepingstock.in/api', 'Testing API only');
-mustInclude('app.json', '"version": "1.5.0"', 'versionName 1.5.0');
-mustInclude('app.json', '"versionCode": 32', 'versionCode 32');
+mustInclude('app.json', '"version": "1.5.1"', 'versionName 1.5.1');
+mustInclude('app.json', '"versionCode": 33', 'versionCode 33');
 mustInclude('app.json', '"name": "Sleeping Stock"', 'app label Sleeping Stock');
 mustInclude('app.json', 'adaptive-icon-monochrome.png', 'monochrome adaptive layer');
 

@@ -25,9 +25,10 @@ class RequestAlertFirebaseMessagingService : FirebaseMessagingService() {
     val isBranchRequest = type == RequestAlertPayload.TYPE_BRANCH_REQUEST
     RequestAlertLog.i("branch_request classification result=$isBranchRequest")
     when (type) {
-      RequestAlertPayload.TYPE_REQUEST_PICKED -> {
+      RequestAlertPayload.TYPE_REQUEST_PICKED,
+      RequestAlertPayload.TYPE_REQUEST_CLOSED -> {
         val requestId = payload?.requestId.orEmpty()
-        RequestAlertLog.i("request_picked received")
+        RequestAlertLog.i("$type received")
         RequestAlertController.handlePicked(this, requestId, payload?.pickedByName.orEmpty())
         RequestAlertModule.emitPicked(payload ?: RequestAlertPayload.fromMap(emptyMap()))
         return

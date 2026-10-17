@@ -5,6 +5,8 @@ import android.os.Bundle
 import com.google.firebase.messaging.RemoteMessage
 import org.json.JSONArray
 import org.json.JSONObject
+import java.time.Instant
+import java.time.OffsetDateTime
 
 data class RequestAlertPayload(
   val requestId: String,
@@ -17,6 +19,8 @@ data class RequestAlertPayload(
   val pickedByName: String = "",
   val actionsEnabled: Boolean = true,
   val actions: String = "all",
+  val ringDeadlineAt: String = "",
+  val ringTtlSeconds: String = "50",
 ) {
   fun toBundle(): Bundle {
     val bundle = Bundle()
@@ -29,6 +33,8 @@ data class RequestAlertPayload(
     bundle.putString(KEY_TYPE, type)
     bundle.putString(KEY_PICKED_BY_NAME, pickedByName)
     bundle.putString(KEY_ACTIONS, actions.ifEmpty { if (actionsEnabled) "all" else "none" })
+    bundle.putString(KEY_RING_DEADLINE_AT, ringDeadlineAt)
+    bundle.putString(KEY_RING_TTL_SECONDS, ringTtlSeconds.ifEmpty { "50" })
     return bundle
   }
 
@@ -42,6 +48,8 @@ data class RequestAlertPayload(
     KEY_TYPE to type,
     KEY_PICKED_BY_NAME to pickedByName,
     KEY_ACTIONS to actions.ifEmpty { if (actionsEnabled) "all" else "none" },
+    KEY_RING_DEADLINE_AT to ringDeadlineAt,
+    KEY_RING_TTL_SECONDS to ringTtlSeconds.ifEmpty { "50" },
     "request_group_key" to requestId,
     "request_number" to requestNumber,
     "requesting_branch" to branchName,
@@ -50,6 +58,8 @@ data class RequestAlertPayload(
     "total_qty" to totalQuantity,
     "type" to type,
     "picked_by_name" to pickedByName,
+    "ring_deadline_at" to ringDeadlineAt,
+    "ring_ttl_seconds" to ringTtlSeconds.ifEmpty { "50" },
   )
 
   /** Snooze is removed — always false. */
@@ -62,9 +72,23 @@ data class RequestAlertPayload(
 
   fun isTransfer(): Boolean = type == TYPE_REQUEST_TRANSFERRED
 
+  /**
+   * Absolute ring stop time in epoch millis.
+   * Prefers ISO [ringDeadlineAt]; otherwise now + [ringTtlSeconds] (default 50).
+   */
+  fun ringDeadlineMillis(): Long? {
+    val iso = ringDeadlineAt.trim()
+    if (iso.isNotEmpty()) {
+      parseIsoMillis(iso)?.let { return it }
+    }
+    val ttl = ringTtlSeconds.trim().toLongOrNull()?.takeIf { it >= 0 } ?: 50L
+    return System.currentTimeMillis() + ttl * 1000L
+  }
+
   companion object {
     const val TYPE_BRANCH_REQUEST = "branch_request"
     const val TYPE_REQUEST_PICKED = "request_picked"
+    const val TYPE_REQUEST_CLOSED = "request_closed"
     const val TYPE_REQUEST_TRANSFERRED = "request_transferred"
     const val KEY_REQUEST_ID = "requestId"
     const val KEY_REQUEST_NUMBER = "requestNumber"
@@ -75,6 +99,8 @@ data class RequestAlertPayload(
     const val KEY_TYPE = "type"
     const val KEY_PICKED_BY_NAME = "pickedByName"
     const val KEY_ACTIONS = "actions"
+    const val KEY_RING_DEADLINE_AT = "ringDeadlineAt"
+    const val KEY_RING_TTL_SECONDS = "ringTtlSeconds"
 
     fun isRequestAlert(data: Map<String, String>?): Boolean {
       if (data.isNullOrEmpty()) return false
@@ -119,6 +145,7 @@ data class RequestAlertPayload(
       return when (data["type"]?.trim()) {
         TYPE_BRANCH_REQUEST -> TYPE_BRANCH_REQUEST
         TYPE_REQUEST_PICKED -> TYPE_REQUEST_PICKED
+        TYPE_REQUEST_CLOSED -> TYPE_REQUEST_CLOSED
         TYPE_REQUEST_TRANSFERRED -> TYPE_REQUEST_TRANSFERRED
         "auto_perpetual" -> "auto_perpetual"
         null, "" -> "empty"
@@ -131,7 +158,13 @@ data class RequestAlertPayload(
       val typeLabel = classifyType(data)
       val classified = typeLabel == TYPE_BRANCH_REQUEST
       RequestAlertLog.i("classification type=$typeLabel result=$classified")
-      if (typeLabel != TYPE_BRANCH_REQUEST && typeLabel != TYPE_REQUEST_PICKED && typeLabel != TYPE_REQUEST_TRANSFERRED) {
+      // request_closed / request_picked: parse payload but never start ringing
+      if (
+        typeLabel != TYPE_BRANCH_REQUEST &&
+        typeLabel != TYPE_REQUEST_PICKED &&
+        typeLabel != TYPE_REQUEST_CLOSED &&
+        typeLabel != TYPE_REQUEST_TRANSFERRED
+      ) {
         return typeLabel to null
       }
       val payload = fromMap(data)
@@ -170,6 +203,7 @@ data class RequestAlertPayload(
           actionsValue == "all" || actionsValue == "pick_reject" || actionsRaw.isEmpty()
         else -> actionsValue != "none"
       }
+      val ringTtl = first(data, KEY_RING_TTL_SECONDS, "ring_ttl_seconds").ifEmpty { "50" }
       return RequestAlertPayload(
         requestId = requestId.ifEmpty { requestNumber },
         requestNumber = requestNumber,
@@ -181,6 +215,8 @@ data class RequestAlertPayload(
         pickedByName = first(data, KEY_PICKED_BY_NAME, "picked_by_name"),
         actionsEnabled = actionsEnabled,
         actions = actionsValue,
+        ringDeadlineAt = first(data, KEY_RING_DEADLINE_AT, "ring_deadline_at"),
+        ringTtlSeconds = ringTtl,
       )
     }
 
@@ -199,6 +235,18 @@ data class RequestAlertPayload(
         bundle.getString(key)?.let { data[key] = it }
       }
       return fromMap(data)
+    }
+
+    private fun parseIsoMillis(iso: String): Long? {
+      return try {
+        Instant.parse(iso).toEpochMilli()
+      } catch (_: Exception) {
+        try {
+          OffsetDateTime.parse(iso).toInstant().toEpochMilli()
+        } catch (_: Exception) {
+          null
+        }
+      }
     }
 
     private fun mergeJsonObject(target: MutableMap<String, String>, json: JSONObject) {
