@@ -7,12 +7,13 @@ import Constants from 'expo-constants';
 import { registerPushToken } from '../api';
 import {
   ACTION_PICK_REQUEST,
-  ACTION_SNOOZE,
+  ACTION_REJECT,
   ANDROID_CHANNEL_IDS,
   ANDROID_SOUND_NAME,
   REQUEST_CATEGORY_ID,
   isBranchRequest,
   isPickAction,
+  isRejectAction,
   isSnoozeAction,
   resolveNotificationData,
 } from '../utils/requestAlert';
@@ -73,9 +74,9 @@ async function ensureRequestCategory() {
       options: { opensAppToForeground: true },
     },
     {
-      identifier: ACTION_SNOOZE,
-      buttonTitle: 'SNOOZE',
-      options: { opensAppToForeground: false },
+      identifier: ACTION_REJECT,
+      buttonTitle: 'REJECT',
+      options: { opensAppToForeground: true },
     },
   ]);
 }
@@ -140,7 +141,7 @@ export async function initPushNotifications({
   onNotificationReceived,
   onNotificationTapped,
   onNotificationPicked,
-  onNotificationSnoozed,
+  onNotificationRejected,
   onTokenError,
 } = {}) {
   const key = deviceId || 'default';
@@ -172,8 +173,8 @@ export async function initPushNotifications({
     if (responseId && responseId === lastHandledResponseId) return;
     lastHandledResponseId = responseId;
     const data = resolveNotificationData(response?.notification?.request?.content?.data || {});
-    if (isSnoozeAction(response?.actionIdentifier)) {
-      onNotificationSnoozed?.(data, response);
+    if (isRejectAction(response?.actionIdentifier) || isSnoozeAction(response?.actionIdentifier)) {
+      onNotificationRejected?.(data, response);
       return;
     }
     if (isPickAction(response?.actionIdentifier)) {
@@ -181,7 +182,7 @@ export async function initPushNotifications({
       return;
     }
     // Notification body tap brings the app forward. Do not Pick and do not
-    // stop ringing — only Pick or Snooze stop the alert.
+    // stop ringing — only Pick or Reject stop the alert.
     onNotificationTapped?.(data, response);
   };
 
@@ -233,6 +234,7 @@ export const PUSH_MANUAL_TEST_NOTES = [
   'Foreground popup + custom ring while app is open',
   'Background shade + custom ring while minimized',
   'Killed-app delivery via FCM',
-  'PICK opens the exact request_group_key after pick lock',
-  'SNOOZE dismisses only the current alert',
+  'PICK claims then opens quantity confirmation (50s window)',
+  'REJECT requires a mandatory reason and dismisses this dealer only',
+  'No Snooze action or reminder timer',
 ];

@@ -9,8 +9,9 @@ import android.widget.Toast
 import kotlin.concurrent.thread
 
 /**
- * Handles Pick / Snooze from the ongoing lock-screen notification.
- * Pick calls the server claim first. A notification body tap never
+ * Handles Pick / Reject from the ongoing lock-screen notification.
+ * Pick calls the server claim first. Reject stops the ring and opens the app
+ * so JS can collect a mandatory reason. A notification body tap never
  * reaches this receiver and must not Pick or stop the ring.
  */
 class RequestAlertActionReceiver : BroadcastReceiver() {
@@ -21,7 +22,7 @@ class RequestAlertActionReceiver : BroadcastReceiver() {
       try {
         when (intent.action) {
           RequestAlertRingingService.ACTION_PICK -> handlePick(context, payload)
-          RequestAlertRingingService.ACTION_SNOOZE -> handleSnooze(context, payload)
+          RequestAlertRingingService.ACTION_REJECT -> handleReject(context, payload)
         }
       } finally {
         pending.finish()
@@ -43,18 +44,24 @@ class RequestAlertActionReceiver : BroadcastReceiver() {
       RequestAlertModule.emitPick(payload)
       RequestAlertController.openAppOnRequest(context, payload)
     } else if (result.alreadyPicked || result.code == "ALREADY_PICKED") {
-      val name = result.pickedByName.ifBlank { "another user" }
-      Handler(Looper.getMainLooper()).post {
-        Toast.makeText(context.applicationContext, "Already picked by $name", Toast.LENGTH_LONG).show()
+      val message = result.message.ifBlank {
+        "This request was already picked by another dealer."
       }
-      RequestAlertController.handlePicked(context, payload.requestId, name)
+      Handler(Looper.getMainLooper()).post {
+        Toast.makeText(context.applicationContext, message, Toast.LENGTH_LONG).show()
+      }
+      RequestAlertController.handlePicked(context, payload.requestId, result.pickedByName)
     } else {
       RequestAlertLog.e("notification pick failed ${result.message}")
     }
   }
 
-  private fun handleSnooze(context: Context, payload: RequestAlertPayload) {
-    if (!payload.canShowSnooze()) {
+  /**
+   * Notification Reject has no reason field — stop ringing, emitReject, and
+   * open the app so JS can collect the mandatory reason (and call reject API).
+   */
+  private fun handleReject(context: Context, payload: RequestAlertPayload) {
+    if (!payload.canShowReject()) {
       return
     }
     val valid = RequestAlertApi.shouldKeepRinging(context, payload)
@@ -62,16 +69,9 @@ class RequestAlertActionReceiver : BroadcastReceiver() {
       RequestAlertController.handlePicked(context, payload.requestId)
       return
     }
-    val result = RequestAlertApi.skipSnooze(context, payload.requestId.ifBlank { payload.requestNumber })
-    if (result.ok) {
-      RequestAlertRingingService.stop(context, payload.requestId)
-      RequestAlertModule.emitSnooze(payload)
-    } else if (result.alreadyPicked || result.code == "ALREADY_PICKED") {
-      val name = result.pickedByName.ifBlank { "another user" }
-      Handler(Looper.getMainLooper()).post {
-        Toast.makeText(context.applicationContext, "Already picked by $name", Toast.LENGTH_LONG).show()
-      }
-      RequestAlertController.handlePicked(context, payload.requestId, name)
-    }
+    RequestAlertLog.i("notification reject — defer reason to JS")
+    RequestAlertController.stopForRequest(context, payload.requestId)
+    RequestAlertModule.emitReject(payload)
+    RequestAlertController.openAppOnRequest(context, payload)
   }
 }

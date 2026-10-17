@@ -10,6 +10,7 @@ import {
   Image,
   Dimensions,
   KeyboardAvoidingView,
+  Modal,
   Platform,
   SafeAreaView,
   ScrollView,
@@ -47,7 +48,7 @@ import {
   logoutSession,
   getNotifications,
   acceptNotification,
-  skipNotification,
+  rejectNotification,
   submitPartResponse,
   completePicking,
   getTransferTargets,
@@ -84,7 +85,7 @@ import {
 import { startRequestRingtone, stopRequestRingtone } from './src/services/requestRingtone';
 import {
   addNativePickListener,
-  addNativeSnoozeListener,
+  addNativeRejectListener,
   addNativeIncomingAlertListener,
   addNativeRequestPickedListener,
   stopRinging,
@@ -94,6 +95,12 @@ import {
   canUseFullScreenIntent,
   requestUseFullScreenIntent,
 } from './src/services/nativeRequestAlert';
+import {
+  verifyTodayStockUploaded,
+  isStockGatedScreen,
+  clearTodayStockGateCache,
+  TODAY_STOCK_MISSING_MESSAGE,
+} from './src/services/todayStockGate';
 import {
   normalizePartNumber,
   splitPartNumbers,
@@ -110,7 +117,28 @@ import { ScreenBackground } from './src/components/ScreenBackground';
 import VoiceTypeButton from './src/components/VoiceTypeButton';
 import MandatoryUpdateScreen from './src/components/MandatoryUpdateScreen';
 import IncomingRequestPopup from './src/components/IncomingRequestPopup';
-import { asOwnedPickedRequest, buildIncomingAlert, canCompleteRequest, canEditRequest, canPickRequest, canReleaseRequest, canSnoozeRequest, canTransferRequest, findRequestGroup, formatSlaRemaining, isBranchRequest, isRequestPickedPush, isRequestTransferredPush, ownerName, requestStatus, resolveNotificationData, statusLabelFor } from './src/utils/requestAlert';
+import {
+  ALREADY_PICKED_MESSAGE,
+  CONFIRM_WINDOW_SECONDS,
+  asOwnedPickedRequest,
+  buildIncomingAlert,
+  canCompleteRequest,
+  canEditRequest,
+  canPickRequest,
+  canRejectRequest,
+  canReleaseRequest,
+  canTransferRequest,
+  confirmSecondsRemaining,
+  findRequestGroup,
+  formatSlaRemaining,
+  isBranchRequest,
+  isRequestPickedPush,
+  isRequestTransferredPush,
+  ownerName,
+  requestStatus,
+  resolveNotificationData,
+  statusLabelFor,
+} from './src/utils/requestAlert';
 import {
   Empty,
   Field,
@@ -205,7 +233,10 @@ export default function App() {
   const [notifications, setNotifications] = useState([]);
   const [notificationsBusy, setNotificationsBusy] = useState(false);
   const [incomingAlert, setIncomingAlert] = useState(null);
+  const [rejectModal, setRejectModal] = useState(null);
+  const [rejectReasonDraft, setRejectReasonDraft] = useState('');
   const [selectedRequest, setSelectedRequest] = useState(null);
+  const [confirmSecondsLeft, setConfirmSecondsLeft] = useState(null);
   const [requestRows, setRequestRows] = useState([]);
   const [requestBusy, setRequestBusy] = useState(false);
 
@@ -258,7 +289,9 @@ export default function App() {
   const screenRef = useRef(screen);
   const loadAutoTasksRef = useRef(null);
   const loadNotificationsRef = useRef(null);
-  const snoozedRequestKeysRef = useRef(new Set());
+  const dismissedRequestKeysRef = useRef(new Set());
+  const stockGateScopeRef = useRef('');
+  const confirmExpiredAlertedRef = useRef(false);
   const sessionRef = useRef(null);
   const notificationsRef = useRef([]);
   const incomingNotificationRef = useRef(null);
@@ -276,6 +309,8 @@ export default function App() {
 
   const clearOldBranchCache = useCallback(async () => {
     try { await clearQueuedRecords(); } catch (_e) {}
+    clearTodayStockGateCache();
+    dismissedRequestKeysRef.current.clear();
     incomingAlertRef.current = null;
     incomingShownKeyRef.current = null;
     incomingNotificationRef.current = null;
@@ -574,6 +609,18 @@ export default function App() {
   }, [session]);
 
   useEffect(() => {
+    const key = [
+      String(session?.brandName || '').trim().toLowerCase(),
+      String(session?.dealerName || '').trim().toLowerCase(),
+      String(session?.branch || '').trim().toLowerCase(),
+    ].join('|');
+    if (stockGateScopeRef.current && stockGateScopeRef.current !== key) {
+      clearTodayStockGateCache();
+    }
+    stockGateScopeRef.current = key;
+  }, [session?.brandName, session?.dealerName, session?.branch]);
+
+  useEffect(() => {
     notificationsRef.current = notifications;
   }, [notifications]);
 
@@ -634,35 +681,111 @@ export default function App() {
     setIncomingAlert(alert);
   }, []);
 
-  const snoozeIncomingAlert = useCallback(async (data) => {
-    const alert = data || incomingAlert || {};
-    const pending = requestStatus(alert) === 'pending' || !alert.status;
-    const skipAllowed = alert.skip_allowed !== false && pending;
-    if (pending && !skipAllowed) {
-      Alert.alert('Snooze unavailable', 'This is the third alert — pick this request.');
-      return;
-    }
-    if (skipAllowed && alert.request_group_key) {
-      try {
-        await skipNotification(alert.request_group_key);
-      } catch (error) {
-        Alert.alert('Unable to Snooze', friendlyError(error));
-        loadNotificationsRef.current?.();
-        return;
-      }
-    }
+  const markRequestDismissed = useCallback((alertOrGroup) => {
+    if (alertOrGroup?.request_group_key) dismissedRequestKeysRef.current.add(alertOrGroup.request_group_key);
+    if (alertOrGroup?.request_number) dismissedRequestKeysRef.current.add(alertOrGroup.request_number);
+    if (alertOrGroup?.requestId) dismissedRequestKeysRef.current.add(String(alertOrGroup.requestId));
+  }, []);
+
+  const clearIncomingPopupLocal = useCallback(async (alert) => {
     incomingShownKeyRef.current = null;
     incomingAlertRef.current = null;
-    stopRinging(alert.request_group_key || alert.requestId || alert.request_number);
+    stopRinging(alert?.request_group_key || alert?.requestId || alert?.request_number);
     await dismissRequestNotification(incomingNotificationRef.current);
     await dismissBranchRequestNotifications();
     incomingNotificationRef.current = null;
-    if (alert.request_group_key) snoozedRequestKeysRef.current.add(alert.request_group_key);
-    if (alert.request_number) snoozedRequestKeysRef.current.add(alert.request_number);
+    markRequestDismissed(alert);
     await stopRequestRingtone();
     setIncomingAlert(null);
+  }, [markRequestDismissed]);
+
+  const rejectIncomingAlert = useCallback(async (dataOrAlert, reason) => {
+    const trimmed = String(reason || '').trim();
+    if (!trimmed) {
+      Alert.alert('Reason required', 'Please enter a rejection reason.');
+      return;
+    }
+    const alert = dataOrAlert || incomingAlert || {};
+    const key = alert.request_group_key || alert.requestId || '';
+    try {
+      if (key) await rejectNotification(key, trimmed);
+    } catch (error) {
+      Alert.alert('Unable to Reject', friendlyError(error));
+      loadNotificationsRef.current?.();
+      return;
+    }
+    await clearIncomingPopupLocal(alert);
+    setRejectModal(null);
+    setRejectReasonDraft('');
     loadNotificationsRef.current?.();
-  }, [incomingAlert]);
+  }, [incomingAlert, clearIncomingPopupLocal]);
+
+  const rejectRequest = useCallback(async (group, reason) => {
+    const trimmed = String(reason || '').trim();
+    if (!trimmed) {
+      Alert.alert('Reason required', 'Please enter a rejection reason.');
+      return;
+    }
+    if (!group?.request_group_key) return;
+    try {
+      stopRinging(group.request_group_key || group.request_number);
+      await rejectNotification(group.request_group_key, trimmed);
+      markRequestDismissed(group);
+      await stopRequestRingtone();
+      await dismissBranchRequestNotifications();
+      setRejectModal(null);
+      setRejectReasonDraft('');
+      loadNotifications();
+    } catch (error) {
+      Alert.alert('Unable to Reject', friendlyError(error));
+      loadNotifications();
+    }
+  }, [markRequestDismissed, loadNotifications]);
+
+  const promptRejectReason = useCallback((groupOrAlert, onConfirm) => {
+    if (Platform.OS === 'ios' && typeof Alert.prompt === 'function') {
+      Alert.prompt(
+        'Reject Request',
+        'Enter a rejection reason (required).',
+        [
+          { text: 'Cancel', style: 'cancel' },
+          {
+            text: 'Reject',
+            style: 'destructive',
+            onPress: (text) => {
+              const trimmed = String(text || '').trim();
+              if (!trimmed) {
+                Alert.alert('Reason required', 'Please enter a rejection reason.');
+                return;
+              }
+              onConfirm?.(trimmed);
+            },
+          },
+        ],
+        'plain-text'
+      );
+      return;
+    }
+    setRejectReasonDraft('');
+    setRejectModal({
+      visible: true,
+      requestGroupKey: groupOrAlert?.request_group_key || '',
+      alert: groupOrAlert,
+      onConfirm,
+    });
+  }, []);
+
+  const openRejectFromPush = useCallback(async (data) => {
+    const payload = resolveNotificationData(data);
+    let rows = notificationsRef.current || [];
+    try {
+      rows = (await getNotifications()) || rows;
+      setNotifications(rows);
+    } catch (_e) {}
+    const group = findRequestGroup(rows, payload);
+    const alert = buildIncomingAlert(payload, sessionRef.current, group);
+    promptRejectReason(alert, (reason) => rejectIncomingAlert(alert, reason));
+  }, [promptRejectReason, rejectIncomingAlert]);
 
   const pickIncomingFromPush = useCallback(async (data) => {
     let rows = notificationsRef.current || [];
@@ -691,12 +814,12 @@ export default function App() {
     const pickSub = addNativePickListener((data) => {
       pickIncomingFromPush(data);
     });
-    const snoozeSub = addNativeSnoozeListener((data) => {
-      snoozeIncomingAlert(data);
+    const rejectSub = addNativeRejectListener((data) => {
+      openRejectFromPush(data);
     });
     const incomingSub = addNativeIncomingAlertListener((data) => {
       const key = data.request_group_key || data.requestId || data.request_number;
-      if (key && snoozedRequestKeysRef.current.has(key) && data.type !== 'request_transferred') return;
+      if (key && dismissedRequestKeysRef.current.has(key) && data.type !== 'request_transferred') return;
       showIncomingFromPush(data);
     });
     const pickedSub = addNativeRequestPickedListener((data) => {
@@ -784,7 +907,7 @@ export default function App() {
           const key = data.request_group_key || data.requestId || data.request_number;
           if (
             key &&
-            !snoozedRequestKeysRef.current.has(key) &&
+            !dismissedRequestKeysRef.current.has(key) &&
             AppState.currentState === 'active' &&
             Platform.OS !== 'android'
           ) {
@@ -807,7 +930,7 @@ export default function App() {
         }
         if (isBranchRequest(data)) {
           const key = data.request_group_key || data.requestId || data.request_number;
-          if (key && !snoozedRequestKeysRef.current.has(key) && Platform.OS !== 'android') {
+          if (key && !dismissedRequestKeysRef.current.has(key) && Platform.OS !== 'android') {
             startRequestRingtone(key);
           }
           showIncomingFromPush(data);
@@ -817,8 +940,8 @@ export default function App() {
       onNotificationPicked: (data) => {
         showIncomingFromPush(data);
       },
-      onNotificationSnoozed: (data) => {
-        snoozeIncomingAlert(data);
+      onNotificationRejected: (data) => {
+        openRejectFromPush(data);
       },
       onTokenError: (error) => {
         console.log('[push] token error', error);
@@ -830,13 +953,13 @@ export default function App() {
       .catch(() => {});
     return () => {
       pickSub?.remove?.();
-      snoozeSub?.remove?.();
+      rejectSub?.remove?.();
       incomingSub?.remove?.();
       pickedSub?.remove?.();
       fsiAppSub?.remove?.();
       teardown();
     };
-  }, [session?.deviceId, showIncomingFromPush, pickIncomingFromPush, snoozeIncomingAlert]);
+  }, [session?.deviceId, showIncomingFromPush, pickIncomingFromPush, openRejectFromPush]);
 
   useEffect(() => {
     const onAppState = (state) => {
@@ -952,6 +1075,34 @@ export default function App() {
   }, [session?.deviceId, screen, incomingAlert]);
 
   useEffect(() => {
+    const deadline = selectedRequest?.confirm_deadline_at;
+    const picked = selectedRequest && requestStatus(selectedRequest) === 'picked' && selectedRequest.accepted_by_me;
+    if (!deadline || !picked) {
+      setConfirmSecondsLeft(null);
+      return undefined;
+    }
+    const tick = () => {
+      const left = confirmSecondsRemaining(deadline);
+      setConfirmSecondsLeft(left);
+      if (left === 0 && !confirmExpiredAlertedRef.current) {
+        confirmExpiredAlertedRef.current = true;
+        Alert.alert(
+          'Confirm window expired',
+          'The quantity confirmation window has expired. Return to notifications to continue if the request is still available.'
+        );
+        setSelectedRequest(null);
+        setRequestRows([]);
+        setConfirmSecondsLeft(null);
+        setScreen('notifications');
+        loadNotificationsRef.current?.();
+      }
+    };
+    tick();
+    const timer = setInterval(tick, 1000);
+    return () => clearInterval(timer);
+  }, [selectedRequest?.confirm_deadline_at, selectedRequest?.status, selectedRequest?.accepted_by_me]);
+
+  useEffect(() => {
     if (!selectedRequest?.request_group_key) return;
     const next = findRequestGroup(notifications, selectedRequest);
     if (!next) return;
@@ -964,7 +1115,15 @@ export default function App() {
       next.accepted_by_me !== selectedRequest.accepted_by_me ||
       next.rejection_reason !== selectedRequest.rejection_reason
     ) {
-      setSelectedRequest(next.accepted_by_me && requestStatus(next) === 'picked' ? asOwnedPickedRequest(next) : next);
+      const merged =
+        next.accepted_by_me && requestStatus(next) === 'picked'
+          ? asOwnedPickedRequest(next, {
+              confirm_deadline_at: selectedRequest.confirm_deadline_at || next.confirm_deadline_at,
+              confirm_window_seconds:
+                selectedRequest.confirm_window_seconds || next.confirm_window_seconds || CONFIRM_WINDOW_SECONDS,
+            })
+          : next;
+      setSelectedRequest(merged);
       if (!canEditRequest(next) && canEditRequest(selectedRequest)) {
         setRequestRows(
           (next.parts || []).map((part) => ({
@@ -1108,19 +1267,41 @@ export default function App() {
     await stopRequestRingtone();
     await dismissBranchRequestNotifications();
     logoutCleanup();
+    clearTodayStockGateCache();
+    dismissedRequestKeysRef.current.clear();
     incomingAlertRef.current = null;
     setIncomingAlert(null);
+    setRejectModal(null);
+    setRejectReasonDraft('');
     clearApiAuthCache();
     await clearSession();
     setSession(null);
     setScreen('pair');
   };
 
-  const navigateGuarded = (next) => {
+  const navigateGuarded = async (next) => {
     if (branchTransferred || !sessionRef.current) {
       setScreen('pair');
       if (branchTransferred) Alert.alert('Branch Transferred', BRANCH_TRANSFERRED_MESSAGE);
       return;
+    }
+    if (isStockGatedScreen(next)) {
+      const status = await verifyTodayStockUploaded(sessionRef.current, { force: true });
+      if (status.error) {
+        Alert.alert(
+          'Stock check failed',
+          status.message || "Unable to verify today's stock upload. Please retry.",
+          [
+            { text: 'Cancel', style: 'cancel' },
+            { text: 'Retry', onPress: () => navigateGuarded(next) },
+          ]
+        );
+        return;
+      }
+      if (!status.uploaded) {
+        Alert.alert("Today's stock required", status.message || TODAY_STOCK_MISSING_MESSAGE);
+        return;
+      }
     }
     setScreen(next);
   };
@@ -1519,11 +1700,10 @@ export default function App() {
       return;
     }
     if (!canPickRequest(group)) {
-      const name = ownerName(group);
       Alert.alert(
         requestStatus(group) === 'picked' ? 'Already Picked' : 'Unavailable',
         requestStatus(group) === 'picked'
-          ? `Already picked by ${name || 'another user'}`
+          ? ALREADY_PICKED_MESSAGE
           : statusLabelFor(requestStatus(group))
       );
       loadNotifications();
@@ -1531,7 +1711,7 @@ export default function App() {
     }
     setRequestBusy(true);
     try {
-      await acceptNotification(group.request_group_key);
+      const result = await acceptNotification(group.request_group_key);
       incomingShownKeyRef.current = null;
       incomingAlertRef.current = null;
       stopRinging(group.request_group_key || group.request_number);
@@ -1540,21 +1720,26 @@ export default function App() {
       incomingNotificationRef.current = null;
       setIncomingAlert(null);
       stopRequestRingtone();
-      if (group.request_group_key) snoozedRequestKeysRef.current.add(group.request_group_key);
-      if (group.request_number) snoozedRequestKeysRef.current.add(group.request_number);
+      markRequestDismissed(group);
       const rows = await getNotifications().catch(() => notificationsRef.current || []);
       setNotifications(rows || []);
       notificationsRef.current = rows || [];
-      const next = asOwnedPickedRequest(findRequestGroup(rows, group) || group);
+      const windowSeconds = Number(result?.confirm_window_seconds) || CONFIRM_WINDOW_SECONDS;
+      const confirmDeadline =
+        result?.confirm_deadline_at ||
+        new Date(Date.now() + windowSeconds * 1000).toISOString();
+      const next = asOwnedPickedRequest(findRequestGroup(rows, group) || group, {
+        confirm_deadline_at: confirmDeadline,
+        confirm_window_seconds: windowSeconds,
+      });
       openRequest(next);
     } catch (error) {
-      const name = error?.data?.detail?.picked_by_name;
       const code = errorCode(error) || error?.code;
       if (code === 'ALREADY_PICKED' || error?.status === 409) {
         stopRinging(group.request_group_key || group.request_number);
         incomingAlertRef.current = null;
         setIncomingAlert(null);
-        Alert.alert('Already Picked', `Already picked by ${name || 'another user'}`);
+        Alert.alert('Already Picked', ALREADY_PICKED_MESSAGE);
       } else {
         Alert.alert('Unable to Pick', friendlyError(error));
       }
@@ -1564,31 +1749,11 @@ export default function App() {
     }
   };
 
-  const snoozeRequest = async (group) => {
-    if (!canSnoozeRequest(group)) {
-      Alert.alert('Snooze unavailable', 'This is the third alert — pick this request.');
-      return;
-    }
-    try {
-      stopRinging(group.request_group_key || group.request_number);
-      const result = await skipNotification(group.request_group_key);
-      if (group.request_group_key) snoozedRequestKeysRef.current.add(group.request_group_key);
-      if (group.request_number) snoozedRequestKeysRef.current.add(group.request_number);
-      await stopRequestRingtone();
-      await dismissBranchRequestNotifications();
-      Alert.alert('Snoozed', `Remaining skips: ${result.skip_allowed_remaining ?? 0}`);
-      loadNotifications();
-    } catch (error) {
-      Alert.alert('Unable to Snooze', friendlyError(error));
-      loadNotifications();
-    }
-  };
-
   const openRequest = (group) => {
-    if (group?.request_group_key) snoozedRequestKeysRef.current.add(group.request_group_key);
-    if (group?.request_number) snoozedRequestKeysRef.current.add(group.request_number);
+    markRequestDismissed(group);
     stopRinging(group?.request_group_key || group?.request_number);
     stopRequestRingtone();
+    confirmExpiredAlertedRef.current = false;
     setSelectedRequest(group);
     setRequestRows(
       (group.parts || []).map((part) => ({
@@ -1930,7 +2095,7 @@ export default function App() {
           refresh={loadNotifications}
           openRequest={openRequest}
           pickRequest={pickRequest}
-          snoozeRequest={snoozeRequest}
+          rejectRequest={(item) => promptRejectReason(item, (reason) => rejectRequest(item, reason))}
         />
       )}
       {screen === 'request' && (
@@ -1947,6 +2112,8 @@ export default function App() {
           onRelease={releaseRequestOwnership}
           busy={requestBusy}
           canEdit={canEditRequest(selectedRequest)}
+          confirmDeadlineAt={selectedRequest?.confirm_deadline_at}
+          confirmSecondsLeft={confirmSecondsLeft}
         />
       )}
       {screen === 'scanner' &&
@@ -1973,9 +2140,65 @@ export default function App() {
         visible={Boolean(incomingAlert)}
         alert={incomingAlert}
         onPick={() => pickIncomingFromPush(incomingAlert?.data || incomingAlert)}
+        onReject={(alert, reason) => rejectIncomingAlert(alert, reason)}
+        onDismiss={() => {
+          clearIncomingPopupLocal(incomingAlert);
+        }}
         onOpen={() => pickIncomingFromPush(incomingAlert?.data || incomingAlert)}
-        onSnooze={snoozeIncomingAlert}
       />
+      <Modal
+        visible={Boolean(rejectModal?.visible)}
+        transparent
+        animationType="fade"
+        onRequestClose={() => {
+          setRejectModal(null);
+          setRejectReasonDraft('');
+        }}
+      >
+        <View style={styles.rejectModalBackdrop}>
+          <View style={styles.rejectModalCard}>
+            <Text style={styles.rejectModalTitle}>REJECT REQUEST</Text>
+            <Text style={styles.rejectModalHint}>Rejection reason is mandatory.</Text>
+            {rejectModal?.alert?.request_number ? (
+              <Text style={styles.rejectModalMeta}>#{rejectModal.alert.request_number}</Text>
+            ) : null}
+            <TextInput
+              style={styles.rejectModalInput}
+              value={rejectReasonDraft}
+              onChangeText={setRejectReasonDraft}
+              placeholder="Enter reason"
+              placeholderTextColor={MUTED}
+              multiline
+              autoFocus
+            />
+            <View style={styles.requestActions}>
+              <TouchableOpacity
+                style={styles.snoozeButton}
+                onPress={() => {
+                  setRejectModal(null);
+                  setRejectReasonDraft('');
+                }}
+              >
+                <Text style={styles.snoozeText}>Cancel</Text>
+              </TouchableOpacity>
+              <TouchableOpacity
+                style={[styles.pickButton, !String(rejectReasonDraft || '').trim() && styles.rejectModalDisabled]}
+                disabled={!String(rejectReasonDraft || '').trim()}
+                onPress={() => {
+                  const trimmed = String(rejectReasonDraft || '').trim();
+                  if (!trimmed) return;
+                  const confirmFn = rejectModal?.onConfirm;
+                  setRejectModal(null);
+                  setRejectReasonDraft('');
+                  confirmFn?.(trimmed);
+                }}
+              >
+                <Text style={styles.pickText}>Confirm Reject</Text>
+              </TouchableOpacity>
+            </View>
+          </View>
+        </View>
+      </Modal>
     </SafeAreaView>
   );
 }
@@ -2007,7 +2230,7 @@ function PairForm(props) {
         />
         <Text style={styles.qrInfo}>
           The NMTS website QR contains a one-time pairing code and secure server URL. A new Mobile User ID is created after
-          first pairing; Re-pair keeps the same ID. Manual pairing code always uses Production.
+          first pairing; Re-pair keeps the same ID. Manual pairing code always uses Testing.
         </Text>
         <PrimaryButton title="Scan NMTS Pairing QR" onPress={props.onScanQr} busy={props.busy} />
         <TouchableOpacity style={{ marginTop: 14 }} onPress={() => props.setShowManual(!props.showManual)}>
@@ -2258,7 +2481,7 @@ function VerificationScreen(props) {
   );
 }
 
-function NotificationsScreen({ onBack, rows, busy, refresh, openRequest, pickRequest, snoozeRequest }) {
+function NotificationsScreen({ onBack, rows, busy, refresh, openRequest, pickRequest, rejectRequest }) {
   return (
     <ScreenBackground>
     <View style={styles.flex}>
@@ -2274,7 +2497,7 @@ function NotificationsScreen({ onBack, rows, busy, refresh, openRequest, pickReq
           const label = item.status_label || statusLabelFor(status);
           const owner = ownerName(item);
           const showPick = canPickRequest(item);
-          const showSnooze = canSnoozeRequest(item);
+          const showReject = canRejectRequest(item);
           const showOwner = owner && status !== 'pending';
           return (
             <View style={styles.requestCard}>
@@ -2297,11 +2520,11 @@ function NotificationsScreen({ onBack, rows, busy, refresh, openRequest, pickReq
                   Items: {item.total_items || 0}    Qty: {item.total_quantity || 0}    SLA: {formatSlaRemaining(item.response_deadline)}
                 </Text>
               </TouchableOpacity>
-              {(showPick || showSnooze) && (
+              {(showPick || showReject) && (
                 <View style={styles.requestActions}>
-                  {showSnooze ? (
-                    <TouchableOpacity style={styles.snoozeButton} onPress={() => snoozeRequest(item)}>
-                      <Text style={styles.snoozeText}>Snooze</Text>
+                  {showReject ? (
+                    <TouchableOpacity style={styles.rejectListButton} onPress={() => rejectRequest(item)}>
+                      <Text style={styles.rejectListText}>Reject</Text>
                     </TouchableOpacity>
                   ) : null}
                   {showPick ? (
@@ -2320,7 +2543,20 @@ function NotificationsScreen({ onBack, rows, busy, refresh, openRequest, pickReq
   );
 }
 
-function RequestScreen({ onBack, request, rows, updateRow, onSubmit, onComplete, onTransfer, onRelease, busy, canEdit }) {
+function RequestScreen({
+  onBack,
+  request,
+  rows,
+  updateRow,
+  onSubmit,
+  onComplete,
+  onTransfer,
+  onRelease,
+  busy,
+  canEdit,
+  confirmDeadlineAt,
+  confirmSecondsLeft,
+}) {
   const scrollRef = useRef(null);
   const qtyRefs = useRef({});
   const status = requestStatus(request);
@@ -2370,6 +2606,13 @@ function RequestScreen({ onBack, request, rows, updateRow, onSubmit, onComplete,
         <Text style={styles.requestHeaderNo}>{request?.request_number}</Text>
         <Text style={styles.requestHeaderSub}>{request?.requesting_branch || request?.requesting_dealer || '-'}</Text>
         {lockMessage ? <Text style={styles.requestLockNote}>{lockMessage}</Text> : null}
+        {canEdit && confirmDeadlineAt && confirmSecondsLeft != null && confirmSecondsLeft > 0 ? (
+          <View style={styles.confirmBanner}>
+            <Text style={styles.confirmBannerText}>
+              Confirm quantities within {confirmSecondsLeft}s
+            </Text>
+          </View>
+        ) : null}
       </View>
       <ScrollView
         ref={scrollRef}
@@ -2829,8 +3072,58 @@ const styles = StyleSheet.create({
     marginRight: 8,
   },
   snoozeText: { color: MUTED, fontWeight: '800' },
+  rejectListButton: {
+    flex: 1,
+    minHeight: 42,
+    borderWidth: 1,
+    borderColor: DANGER,
+    borderRadius: 11,
+    alignItems: 'center',
+    justifyContent: 'center',
+    marginRight: 8,
+  },
+  rejectListText: { color: DANGER, fontWeight: '800' },
   pickButton: { flex: 1.5, minHeight: 42, backgroundColor: BLUE, borderRadius: 11, alignItems: 'center', justifyContent: 'center' },
   pickText: { color: '#041018', fontWeight: '900' },
+  confirmBanner: {
+    marginTop: 10,
+    width: '100%',
+    paddingVertical: 8,
+    paddingHorizontal: 10,
+    borderRadius: 8,
+    backgroundColor: 'rgba(245, 197, 66, 0.18)',
+    borderWidth: 1,
+    borderColor: NEON_YELLOW,
+  },
+  confirmBannerText: { color: NEON_YELLOW, fontWeight: '800', fontSize: 13, textAlign: 'center' },
+  rejectModalBackdrop: {
+    flex: 1,
+    backgroundColor: 'rgba(0,0,0,0.72)',
+    justifyContent: 'center',
+    padding: 24,
+  },
+  rejectModalCard: {
+    backgroundColor: CARD_SOLID,
+    borderRadius: 16,
+    borderWidth: 1,
+    borderColor: BORDER,
+    padding: 18,
+  },
+  rejectModalTitle: { color: DANGER, fontWeight: '900', fontSize: 14, letterSpacing: 1 },
+  rejectModalHint: { marginTop: 8, color: MUTED, fontSize: 12 },
+  rejectModalMeta: { marginTop: 6, color: DARK, fontWeight: '800' },
+  rejectModalInput: {
+    marginTop: 12,
+    minHeight: 88,
+    borderWidth: 1,
+    borderColor: BORDER,
+    borderRadius: 10,
+    padding: 12,
+    color: DARK,
+    textAlignVertical: 'top',
+    backgroundColor: 'rgba(8, 16, 28, 0.92)',
+  },
+  rejectModalDisabled: { opacity: 0.45 },
   requestHeader: { padding: 14, backgroundColor: CARD_SOLID, borderBottomWidth: 1, borderBottomColor: BORDER, alignItems: 'center' },
   requestHeaderNo: { color: DARK, fontSize: 17, fontWeight: '900' },
   requestHeaderSub: { marginTop: 3, color: MUTED, fontSize: 11 },

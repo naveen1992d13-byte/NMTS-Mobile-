@@ -2,10 +2,12 @@ import Constants from 'expo-constants';
 
 export const TESTING_API_BASE_URL = 'https://testing.sleepingstock.in/api';
 export const PRODUCTION_API_BASE_URL = 'https://api.sleepingstock.in/api';
-export const ALLOWED_API_BASE_URLS = [TESTING_API_BASE_URL, PRODUCTION_API_BASE_URL];
-export const MANUAL_PAIRING_API_BASE_URL = PRODUCTION_API_BASE_URL;
 
-const fallbackApiBaseUrl = '';
+// Testing APK on this branch points only at the Testing backend.
+export const ALLOWED_API_BASE_URLS = [TESTING_API_BASE_URL];
+export const MANUAL_PAIRING_API_BASE_URL = TESTING_API_BASE_URL;
+
+const fallbackApiBaseUrl = TESTING_API_BASE_URL;
 
 export function normalizeApiBaseUrl(value) {
   const raw = String(value || '').trim().replace(/\/+$/, '');
@@ -22,7 +24,7 @@ export function normalizeApiBaseUrl(value) {
     throw new Error('Only secure HTTPS NMTS server URLs are allowed.');
   }
   if (!ALLOWED_API_BASE_URLS.includes(raw)) {
-    throw new Error('This NMTS server URL is not allowed. Use a Testing or Production pairing QR, or the Production pairing code.');
+    throw new Error('This Testing APK only accepts https://testing.sleepingstock.in. Use a Testing pairing QR.');
   }
   return raw;
 }

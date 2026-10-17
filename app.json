@@ -1,8 +1,8 @@
 {
   "expo": {
-    "name": "Sleeping Stock Mobile",
+    "name": "Sleeping Stock",
     "slug": "sleeping-stock-mobile",
-    "version": "1.4.9",
+    "version": "1.5.0",
     "orientation": "portrait",
     "userInterfaceStyle": "dark",
     "newArchEnabled": true,
@@ -14,7 +14,7 @@
     },
     "android": {
       "package": "in.sleepingstock.mobile",
-      "versionCode": 31,
+      "versionCode": 32,
       "googleServicesFile": "./google-services.json",
       "icon": "./assets/source/sleeping-stock-app-icon-safe-zone.png",
       "permissions": [
@@ -30,7 +30,9 @@
       ],
       "adaptiveIcon": {
         "foregroundImage": "./assets/source/adaptive-icon-foreground-logo-only.png",
-        "backgroundImage": "./assets/source/adaptive-icon-background.png"
+        "backgroundImage": "./assets/source/adaptive-icon-background.png",
+        "monochromeImage": "./assets/source/adaptive-icon-monochrome.png",
+        "backgroundColor": "#05070d"
       },
       "softwareKeyboardLayoutMode": "resize"
     },
@@ -72,7 +74,8 @@
     "extra": {
       "eas": {
         "projectId": "545530df-24b8-4e30-a35d-0fb66b3c3f81"
-      }
+      },
+      "apiBaseUrl": "https://testing.sleepingstock.in/api"
     },
     "owner": "naveensleep"
   }

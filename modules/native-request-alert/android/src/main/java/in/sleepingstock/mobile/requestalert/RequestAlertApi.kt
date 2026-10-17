@@ -20,8 +20,14 @@ internal object RequestAlertApi {
     return postAction(context, "/mobile/notifications/accept", JSONObject().put("request_group_key", requestGroupKey))
   }
 
-  fun skipSnooze(context: Context, requestGroupKey: String): ClaimResult {
-    return postAction(context, "/mobile/notifications/skip", JSONObject().put("request_group_key", requestGroupKey))
+  fun rejectRequest(context: Context, requestGroupKey: String, reason: String): ClaimResult {
+    return postAction(
+      context,
+      "/mobile/notifications/reject",
+      JSONObject()
+        .put("request_group_key", requestGroupKey)
+        .put("reason", reason),
+    )
   }
 
   fun shouldKeepRinging(context: Context, payload: RequestAlertPayload): Boolean? {
@@ -92,13 +98,22 @@ internal object RequestAlertApi {
       val detailObj = detail as? JSONObject
       val name = detailObj?.optString("picked_by_name").orEmpty()
         .ifBlank { json?.optString("picked_by_name").orEmpty() }
+      // Prefer detail.message (ALREADY_PICKED and other coded errors)
       val message = detailObj?.optString("message").orEmpty()
         .ifBlank { json?.optString("message").orEmpty() }
       val errCode = detailObj?.optString("code").orEmpty()
         .ifBlank { json?.optString("code").orEmpty() }
       when {
         code in 200..299 -> ClaimResult(true, json?.optBoolean("already_owned") == true, name, message, errCode)
-        code == 409 -> ClaimResult(false, errCode == "ALREADY_PICKED" || name.isNotBlank(), name.ifBlank { "another user" }, message, errCode)
+        code == 409 -> {
+          val already = errCode == "ALREADY_PICKED" || name.isNotBlank()
+          val alreadyMessage = when {
+            message.isNotBlank() -> message
+            errCode == "ALREADY_PICKED" -> "This request was already picked by another dealer."
+            else -> message
+          }
+          ClaimResult(false, already, name.ifBlank { "another user" }, alreadyMessage, errCode)
+        }
         else -> ClaimResult(false, false, name, message.ifBlank { "Unable to pick" }, errCode)
       }
     } catch (error: Exception) {

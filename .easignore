@@ -5,4 +5,8 @@ tmp
 *.log
 assets/source/nmts-mobile-wall-background.png
 assets/source/previews
+assets/source/legacy-launcher
+assets/source/adaptive-xml
+assets/source/play-store-icon-512.png
 assets/source/sleeping-stock-logo-only-source.png
+assets/source/sleeping-stock-app-icon-safe-zone.png

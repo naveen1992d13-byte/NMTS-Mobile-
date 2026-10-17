@@ -41,10 +41,15 @@ export function addNativePickListener(listener) {
   });
 }
 
-export function addNativeSnoozeListener(listener) {
-  return NativeRequestAlert?.addListener?.('onSnooze', (payload) => {
+export function addNativeRejectListener(listener) {
+  return NativeRequestAlert?.addListener?.('onReject', (payload) => {
     listener(toRequestAlertData(payload || {}));
   });
+}
+
+/** @deprecated Snooze removed — no-op. Use addNativeRejectListener. */
+export function addNativeSnoozeListener(_listener) {
+  return { remove() {} };
 }
 
 export default NativeRequestAlert;

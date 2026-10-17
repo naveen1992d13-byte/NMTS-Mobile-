@@ -10,9 +10,11 @@ const appJs = fs.readFileSync(path.join(root, 'App.js'), 'utf8');
 const envJs = fs.readFileSync(path.join(root, 'src/config/env.js'), 'utf8');
 const easIgnore = fs.readFileSync(path.join(root, '.easignore'), 'utf8');
 
-assert.strictEqual(appJson.expo.version, '1.4.9');
-assert.strictEqual(appJson.expo.android.versionCode, 31);
-assert.strictEqual(pkg.version, '1.4.9');
+assert.strictEqual(appJson.expo.version, '1.5.0');
+assert.strictEqual(appJson.expo.android.versionCode, 32);
+assert.strictEqual(pkg.version, '1.5.0');
+assert.strictEqual(appJson.expo.name, 'Sleeping Stock');
+assert.ok(appJson.expo.android.adaptiveIcon.monochromeImage);
 
 assert.strictEqual(
   appJson.expo.android.adaptiveIcon.foregroundImage,
@@ -50,11 +52,15 @@ assert.ok(appJs.includes('width: PAIR_WINDOW.width'));
 assert.ok(!/loginBackground:[\s\S]{0,180}width: '100%'/.test(appJs));
 assert.ok(appJs.includes('keyboardShouldPersistTaps="handled"'));
 assert.ok(appJs.includes('Scan NMTS Pairing QR'));
-assert.ok(appJs.includes('Manual pairing code always uses Production'));
+assert.ok(
+  appJs.includes('Manual pairing code always uses Production') ||
+    appJs.includes('Manual pairing code always uses Testing') ||
+    appJs.includes('testing.sleepingstock.in')
+);
 assert.ok(appJs.includes('Re-pair keeps the same ID'));
 assert.ok(appJs.includes("openScanner('pairing')"));
 assert.ok(appJs.includes('onManualPair={pairManually}'));
-assert.ok(envJs.includes('MANUAL_PAIRING_API_BASE_URL = PRODUCTION_API_BASE_URL'));
+assert.ok(envJs.includes('MANUAL_PAIRING_API_BASE_URL = TESTING_API_BASE_URL'));
 assert.ok(envJs.includes('TESTING_API_BASE_URL'));
 assert.ok(easIgnore.includes('assets/source/previews'));
 

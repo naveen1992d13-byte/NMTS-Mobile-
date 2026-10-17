@@ -1,13 +1,16 @@
-import React from 'react';
-import { Modal, StyleSheet, Text, TouchableOpacity, View } from 'react-native';
-import { BORDER, CARD_SOLID, MUTED, NEON_CYAN, NEON_YELLOW, TEXT } from '../theme';
-import { canPickRequest, canSnoozeRequest, ownerName, requestStatus } from '../utils/requestAlert';
+import React, { useState } from 'react';
+import { Modal, StyleSheet, Text, TextInput, TouchableOpacity, View } from 'react-native';
+import { BORDER, CARD_SOLID, DANGER, MUTED, NEON_CYAN, NEON_YELLOW, TEXT } from '../theme';
+import { canPickRequest, canRejectRequest, ownerName, requestStatus } from '../utils/requestAlert';
 
-export default function IncomingRequestPopup({ visible, alert, onPick, onSnooze, onOpen }) {
+export default function IncomingRequestPopup({ visible, alert, onPick, onReject, onOpen, onDismiss }) {
+  const [rejectOpen, setRejectOpen] = useState(false);
+  const [reason, setReason] = useState('');
+
   if (!alert) return null;
   const transferred = alert.type === 'request_transferred';
   const showPick = !transferred && canPickRequest(alert.group || alert);
-  const skipAllowed = !transferred && canSnoozeRequest(alert.group || alert);
+  const showReject = !transferred && canRejectRequest(alert.group || alert);
   const owner = ownerName(alert) || alert.picked_by_name || '';
   const status = requestStatus(alert);
   const statusText =
@@ -23,8 +26,16 @@ export default function IncomingRequestPopup({ visible, alert, onPick, onSnooze,
               ? 'EXPIRED – NO RESPONSE'
               : alert.status_label || '';
 
+  const submitReject = () => {
+    const trimmed = String(reason || '').trim();
+    if (!trimmed) return;
+    setRejectOpen(false);
+    setReason('');
+    onReject?.(alert, trimmed);
+  };
+
   return (
-    <Modal visible={visible} transparent animationType="fade" onRequestClose={onSnooze}>
+    <Modal visible={visible} transparent animationType="fade" onRequestClose={onDismiss}>
       <View style={styles.backdrop}>
         <View style={styles.card}>
           <Text style={styles.kicker}>{transferred ? 'REQUEST TRANSFERRED' : 'INCOMING REQUEST'}</Text>
@@ -56,21 +67,51 @@ export default function IncomingRequestPopup({ visible, alert, onPick, onSnooze,
             </TouchableOpacity>
           ) : showPick ? (
             <View style={styles.actions}>
-              {skipAllowed ? (
-                <TouchableOpacity style={styles.snooze} onPress={onSnooze}>
-                  <Text style={styles.snoozeText}>SNOOZE</Text>
+              {showReject ? (
+                <TouchableOpacity style={styles.reject} onPress={() => setRejectOpen(true)}>
+                  <Text style={styles.rejectText}>REJECT</Text>
                 </TouchableOpacity>
               ) : null}
-              <TouchableOpacity style={[styles.pick, !skipAllowed && styles.pickSolo]} onPress={onPick}>
+              <TouchableOpacity style={[styles.pick, !showReject && styles.pickSolo]} onPress={onPick}>
                 <Text style={styles.pickText}>PICK</Text>
               </TouchableOpacity>
             </View>
           ) : (
-            <TouchableOpacity style={styles.dismiss} onPress={onSnooze}>
-              <Text style={styles.snoozeText}>DISMISS</Text>
+            <TouchableOpacity style={styles.dismiss} onPress={onDismiss}>
+              <Text style={styles.rejectText}>DISMISS</Text>
             </TouchableOpacity>
           )}
         </View>
+
+        <Modal visible={rejectOpen} transparent animationType="fade" onRequestClose={() => setRejectOpen(false)}>
+          <View style={styles.backdrop}>
+            <View style={styles.card}>
+              <Text style={styles.kicker}>REJECT REQUEST</Text>
+              <Text style={styles.reasonHint}>Rejection reason is mandatory.</Text>
+              <TextInput
+                style={styles.reasonInput}
+                value={reason}
+                onChangeText={setReason}
+                placeholder="Enter reason"
+                placeholderTextColor={MUTED}
+                multiline
+                autoFocus
+              />
+              <View style={styles.actions}>
+                <TouchableOpacity style={styles.reject} onPress={() => { setRejectOpen(false); setReason(''); }}>
+                  <Text style={styles.rejectText}>CANCEL</Text>
+                </TouchableOpacity>
+                <TouchableOpacity
+                  style={[styles.pick, !String(reason || '').trim() && styles.pickDisabled]}
+                  disabled={!String(reason || '').trim()}
+                  onPress={submitReject}
+                >
+                  <Text style={styles.pickText}>CONFIRM REJECT</Text>
+                </TouchableOpacity>
+              </View>
+            </View>
+          </View>
+        </Modal>
       </View>
     </Modal>
   );
@@ -106,17 +147,17 @@ const styles = StyleSheet.create({
   metaValue: { marginTop: 4, color: TEXT, fontSize: 16, fontWeight: '900' },
   ownerNote: { color: NEON_YELLOW, fontWeight: '800', marginBottom: 14, fontSize: 13 },
   actions: { flexDirection: 'row' },
-  snooze: {
+  reject: {
     flex: 1,
     minHeight: 48,
     marginRight: 10,
     borderRadius: 14,
     borderWidth: 1,
-    borderColor: BORDER,
+    borderColor: DANGER || '#ff5c7a',
     alignItems: 'center',
     justifyContent: 'center',
   },
-  snoozeText: { color: MUTED, fontWeight: '900' },
+  rejectText: { color: MUTED, fontWeight: '900' },
   pick: {
     flex: 1.4,
     minHeight: 48,
@@ -126,6 +167,7 @@ const styles = StyleSheet.create({
     justifyContent: 'center',
   },
   pickSolo: { flex: 1 },
+  pickDisabled: { opacity: 0.45 },
   pickText: { color: '#041018', fontWeight: '900' },
   dismiss: {
     minHeight: 48,
@@ -134,5 +176,16 @@ const styles = StyleSheet.create({
     borderColor: BORDER,
     alignItems: 'center',
     justifyContent: 'center',
+  },
+  reasonHint: { color: MUTED, marginBottom: 10, fontWeight: '700' },
+  reasonInput: {
+    minHeight: 90,
+    borderWidth: 1,
+    borderColor: BORDER,
+    borderRadius: 12,
+    color: TEXT,
+    padding: 12,
+    marginBottom: 16,
+    textAlignVertical: 'top',
   },
 });

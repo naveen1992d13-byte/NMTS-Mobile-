@@ -1,6 +1,7 @@
 package `in`.sleepingstock.mobile.requestalert
 
 import android.app.Activity
+import android.app.AlertDialog
 import android.content.BroadcastReceiver
 import android.content.Context
 import android.content.Intent
@@ -10,8 +11,10 @@ import android.graphics.Typeface
 import android.graphics.drawable.GradientDrawable
 import android.os.Build
 import android.os.Bundle
+import android.text.InputType
 import android.util.TypedValue
 import android.view.Gravity
+import android.widget.EditText
 import android.widget.ImageView
 import android.widget.LinearLayout
 import android.widget.TextView
@@ -21,12 +24,12 @@ import kotlin.concurrent.thread
 /**
  * Dedicated full-screen lock-screen alert. Never starts MainActivity on show.
  * Pick claims the request on the server first, then dismisses the keyguard
- * and opens the app on that request.
+ * and opens the app on that request. Reject requires a non-empty reason.
  */
 class RequestAlertLockGateActivity : Activity() {
   private var payload: RequestAlertPayload = RequestAlertPayload.fromIntent(null)
   private var busy = false
-  private var snoozeButton: TextView? = null
+  private var rejectButton: TextView? = null
   private var pickButton: TextView? = null
   private var openButton: TextView? = null
 
@@ -38,7 +41,11 @@ class RequestAlertLockGateActivity : Activity() {
       }
       val name = intent?.getStringExtra(RequestAlertPayload.KEY_PICKED_BY_NAME).orEmpty()
       if (name.isNotBlank() && !payload.isTransfer()) {
-        Toast.makeText(this@RequestAlertLockGateActivity, "Already picked by $name", Toast.LENGTH_LONG).show()
+        Toast.makeText(
+          this@RequestAlertLockGateActivity,
+          "This request was already picked by another dealer.",
+          Toast.LENGTH_LONG,
+        ).show()
       }
       finish()
     }
@@ -130,13 +137,13 @@ class RequestAlertLockGateActivity : Activity() {
       openButton = actionButton("OPEN REQUEST", filled = true) { onOpen() }
       actions.addView(openButton, LinearLayout.LayoutParams(0, dp(52), 1f))
     } else {
-      if (payload.canShowSnooze()) {
-        snoozeButton = actionButton("SNOOZE", filled = false) { onSnooze() }
-        actions.addView(snoozeButton, LinearLayout.LayoutParams(0, dp(52), 1f).apply { rightMargin = dp(10) })
+      if (payload.canShowReject()) {
+        rejectButton = actionButton("REJECT", filled = false) { onReject() }
+        actions.addView(rejectButton, LinearLayout.LayoutParams(0, dp(52), 1f).apply { rightMargin = dp(10) })
       }
       if (payload.canShowPick()) {
         pickButton = actionButton("PICK REQUEST", filled = true) { onPick() }
-        actions.addView(pickButton, LinearLayout.LayoutParams(0, dp(52), if (payload.canShowSnooze()) 1.4f else 1f))
+        actions.addView(pickButton, LinearLayout.LayoutParams(0, dp(52), if (payload.canShowReject()) 1.4f else 1f))
       }
     }
     root.addView(actions)
@@ -165,9 +172,11 @@ class RequestAlertLockGateActivity : Activity() {
             RequestAlertController.openAppOnRequest(this, payload, dismissKeyguardFrom = this)
             finish()
           } else if (result.alreadyPicked || result.code == "ALREADY_PICKED") {
-            val name = result.pickedByName.ifBlank { "another user" }
-            Toast.makeText(this, "Already picked by $name", Toast.LENGTH_LONG).show()
-            RequestAlertController.handlePicked(this, payload.requestId, name)
+            val message = result.message.ifBlank {
+              "This request was already picked by another dealer."
+            }
+            Toast.makeText(this, message, Toast.LENGTH_LONG).show()
+            RequestAlertController.handlePicked(this, payload.requestId, result.pickedByName)
             finish()
           } else {
             busy = false
@@ -179,12 +188,36 @@ class RequestAlertLockGateActivity : Activity() {
     }
   }
 
-  private fun onSnooze() {
+  private fun onReject() {
     if (busy) return
-    if (!payload.canShowSnooze()) {
-      Toast.makeText(this, "Snooze is not available on this alert", Toast.LENGTH_LONG).show()
+    if (!payload.canShowReject()) {
+      Toast.makeText(this, "Reject is not available on this alert", Toast.LENGTH_LONG).show()
       return
     }
+    val input = EditText(this).apply {
+      inputType = InputType.TYPE_CLASS_TEXT or InputType.TYPE_TEXT_FLAG_MULTI_LINE
+      hint = "Reason (required)"
+      minLines = 2
+      setPadding(dp(16), dp(12), dp(16), dp(12))
+    }
+    AlertDialog.Builder(this)
+      .setTitle("Reject request")
+      .setMessage("Please provide a reason for rejecting this request.")
+      .setView(input)
+      .setNegativeButton("Cancel", null)
+      .setPositiveButton("Reject") { _, _ ->
+        val reason = input.text?.toString()?.trim().orEmpty()
+        if (reason.isEmpty()) {
+          Toast.makeText(this, "A reason is required to reject", Toast.LENGTH_LONG).show()
+          return@setPositiveButton
+        }
+        submitReject(reason)
+      }
+      .show()
+  }
+
+  private fun submitReject(reason: String) {
+    if (busy) return
     busy = true
     setButtonsEnabled(false)
     validateThen { valid ->
@@ -194,21 +227,28 @@ class RequestAlertLockGateActivity : Activity() {
         return@validateThen
       }
       thread {
-        val result = RequestAlertApi.skipSnooze(this, payload.requestId.ifBlank { payload.requestNumber })
+        val result = RequestAlertApi.rejectRequest(
+          this,
+          payload.requestId.ifBlank { payload.requestNumber },
+          reason,
+        )
         runOnUiThread {
           if (result.ok) {
-            RequestAlertModule.emitSnooze(payload)
+            RequestAlertLog.i("LockGate reject succeeded")
+            RequestAlertModule.emitReject(payload)
             RequestAlertController.stopForRequest(this, payload.requestId)
             finish()
           } else if (result.alreadyPicked || result.code == "ALREADY_PICKED") {
-            val name = result.pickedByName.ifBlank { "another user" }
-            Toast.makeText(this, "Already picked by $name", Toast.LENGTH_LONG).show()
-            RequestAlertController.handlePicked(this, payload.requestId, name)
+            val message = result.message.ifBlank {
+              "This request was already picked by another dealer."
+            }
+            Toast.makeText(this, message, Toast.LENGTH_LONG).show()
+            RequestAlertController.handlePicked(this, payload.requestId, result.pickedByName)
             finish()
           } else {
             busy = false
             setButtonsEnabled(true)
-            Toast.makeText(this, result.message.ifBlank { "Unable to snooze" }, Toast.LENGTH_LONG).show()
+            Toast.makeText(this, result.message.ifBlank { "Unable to reject" }, Toast.LENGTH_LONG).show()
           }
         }
       }
@@ -230,7 +270,7 @@ class RequestAlertLockGateActivity : Activity() {
   }
 
   private fun setButtonsEnabled(enabled: Boolean) {
-    snoozeButton?.isEnabled = enabled
+    rejectButton?.isEnabled = enabled
     pickButton?.isEnabled = enabled
     openButton?.isEnabled = enabled
   }

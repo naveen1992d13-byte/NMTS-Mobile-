@@ -16,6 +16,7 @@ data class RequestAlertPayload(
   val type: String = TYPE_BRANCH_REQUEST,
   val pickedByName: String = "",
   val actionsEnabled: Boolean = true,
+  val actions: String = "all",
 ) {
   fun toBundle(): Bundle {
     val bundle = Bundle()
@@ -27,7 +28,7 @@ data class RequestAlertPayload(
     bundle.putString(KEY_ROUND, round)
     bundle.putString(KEY_TYPE, type)
     bundle.putString(KEY_PICKED_BY_NAME, pickedByName)
-    bundle.putString(KEY_ACTIONS, if (actionsEnabled) "all" else "none")
+    bundle.putString(KEY_ACTIONS, actions.ifEmpty { if (actionsEnabled) "all" else "none" })
     return bundle
   }
 
@@ -40,7 +41,7 @@ data class RequestAlertPayload(
     KEY_ROUND to round,
     KEY_TYPE to type,
     KEY_PICKED_BY_NAME to pickedByName,
-    KEY_ACTIONS to if (actionsEnabled) "all" else "none",
+    KEY_ACTIONS to actions.ifEmpty { if (actionsEnabled) "all" else "none" },
     "request_group_key" to requestId,
     "request_number" to requestNumber,
     "requesting_branch" to branchName,
@@ -51,11 +52,11 @@ data class RequestAlertPayload(
     "picked_by_name" to pickedByName,
   )
 
-  fun canShowSnooze(): Boolean {
-    if (!actionsEnabled || type != TYPE_BRANCH_REQUEST) return false
-    val roundValue = round.toIntOrNull() ?: 0
-    return roundValue < 2
-  }
+  /** Snooze is removed — always false. */
+  fun canShowSnooze(): Boolean = false
+
+  fun canShowReject(): Boolean =
+    actionsEnabled && type == TYPE_BRANCH_REQUEST && actions != "none"
 
   fun canShowPick(): Boolean = actionsEnabled && type == TYPE_BRANCH_REQUEST
 
@@ -155,7 +156,20 @@ data class RequestAlertPayload(
       val requestId = first(data, KEY_REQUEST_ID, "request_group_key", "request_id")
       val requestNumber = first(data, KEY_REQUEST_NUMBER, "request_number")
       val type = first(data, KEY_TYPE, "type").ifEmpty { TYPE_BRANCH_REQUEST }
-      val actions = first(data, KEY_ACTIONS, "actions")
+      val actionsRaw = first(data, KEY_ACTIONS, "actions")
+      // empty / "all" / "pick_reject" enable pick+reject for branch_request
+      val actionsValue = when {
+        actionsRaw.isEmpty() -> "all"
+        actionsRaw == "pick_reject" || actionsRaw == "all" || actionsRaw == "none" -> actionsRaw
+        else -> actionsRaw
+      }
+      val actionsEnabled = when {
+        type == TYPE_REQUEST_TRANSFERRED -> false
+        actionsValue == "none" -> false
+        type == TYPE_BRANCH_REQUEST ->
+          actionsValue == "all" || actionsValue == "pick_reject" || actionsRaw.isEmpty()
+        else -> actionsValue != "none"
+      }
       return RequestAlertPayload(
         requestId = requestId.ifEmpty { requestNumber },
         requestNumber = requestNumber,
@@ -165,7 +179,8 @@ data class RequestAlertPayload(
         round = first(data, KEY_ROUND, "kind").let { kindToRound(it) },
         type = type,
         pickedByName = first(data, KEY_PICKED_BY_NAME, "picked_by_name"),
-        actionsEnabled = type != TYPE_REQUEST_TRANSFERRED && actions != "none",
+        actionsEnabled = actionsEnabled,
+        actions = actionsValue,
       )
     }
 

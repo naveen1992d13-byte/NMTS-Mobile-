@@ -163,6 +163,26 @@ def circle_mask(size):
     return m
 
 
+def square_mask(size):
+    return Image.new("L", (size, size), 255)
+
+
+def teardrop_mask(size):
+    """Common OEM teardrop: circle with a flattened/rounded bottom-right corner."""
+    m = Image.new("L", (size, size), 0)
+    draw = ImageDraw.Draw(m)
+    draw.ellipse((0, 0, size - 1, size - 1), fill=255)
+    # Flatten lower-right into a soft cut (teardrop-ish).
+    cut = int(size * 0.28)
+    draw.polygon(
+        [(size - 1, size // 2), (size - 1, size - 1), (size // 2, size - 1), (size - cut, size - cut)],
+        fill=0,
+    )
+    # Soften with a rounded corner fill back for a teardrop lobe.
+    draw.pieslice((size - cut * 2, size - cut * 2, size - 1, size - 1), 0, 90, fill=255)
+    return m
+
+
 def composite(fg, bg):
     bg_r = bg.convert("RGBA").resize((CANVAS, CANVAS), Image.Resampling.LANCZOS)
     out = Image.new("RGBA", (CANVAS, CANVAS))
@@ -191,6 +211,65 @@ def launcher(im, px):
     return im.resize((px, px), Image.Resampling.LANCZOS)
 
 
+def make_monochrome(fg: Image.Image) -> Image.Image:
+    """White silhouette on transparent for Android 13+ themed icons."""
+    alpha = fg.getchannel("A")
+    out = Image.new("RGBA", fg.size, (0, 0, 0, 0))
+    white = Image.new("RGBA", fg.size, (255, 255, 255, 255))
+    out.paste(white, mask=alpha)
+    return out
+
+
+def write_legacy_mipmaps(comp: Image.Image):
+    """mdpi–xxxhdpi legacy icons + Play Store 512."""
+    densities = {
+        "mipmap-mdpi": 48,
+        "mipmap-hdpi": 72,
+        "mipmap-xhdpi": 96,
+        "mipmap-xxhdpi": 144,
+        "mipmap-xxxhdpi": 192,
+    }
+    legacy_root = ROOT / "assets" / "source" / "legacy-launcher"
+    legacy_root.mkdir(parents=True, exist_ok=True)
+    for folder, px in densities.items():
+        d = legacy_root / folder
+        d.mkdir(parents=True, exist_ok=True)
+        launcher(comp, px).save(d / "ic_launcher.png")
+        apply_mask(launcher(comp, px), circle_mask(px)).save(d / "ic_launcher_round.png")
+    play = ROOT / "assets" / "source" / "play-store-icon-512.png"
+    launcher(comp, 512).save(play)
+    # Also refresh top-level Expo icon assets used by app.json.
+    launcher(comp, 1024).save(ROOT / "assets" / "icon.png")
+    launcher(comp, 1024).save(ROOT / "assets" / "adaptive-icon.png")
+    print("wrote legacy mipmaps + play-store 512")
+
+
+def write_adaptive_xml_templates():
+    """Document the adaptive XML Expo/Android prebuild will materialize."""
+    res = ROOT / "assets" / "source" / "adaptive-xml"
+    res.mkdir(parents=True, exist_ok=True)
+    (res / "ic_launcher.xml").write_text(
+        """<?xml version="1.0" encoding="utf-8"?>
+<adaptive-icon xmlns:android="http://schemas.android.com/apk/res/android">
+    <background android:drawable="@mipmap/ic_launcher_background"/>
+    <foreground android:drawable="@mipmap/ic_launcher_foreground"/>
+    <monochrome android:drawable="@mipmap/ic_launcher_monochrome"/>
+</adaptive-icon>
+""",
+        encoding="utf-8",
+    )
+    (res / "ic_launcher_round.xml").write_text(
+        """<?xml version="1.0" encoding="utf-8"?>
+<adaptive-icon xmlns:android="http://schemas.android.com/apk/res/android">
+    <background android:drawable="@mipmap/ic_launcher_background"/>
+    <foreground android:drawable="@mipmap/ic_launcher_foreground"/>
+    <monochrome android:drawable="@mipmap/ic_launcher_monochrome"/>
+</adaptive-icon>
+""",
+        encoding="utf-8",
+    )
+
+
 def main():
     PREV.mkdir(parents=True, exist_ok=True)
     src = Image.open(SRC).convert("RGBA")
@@ -200,15 +279,22 @@ def main():
     fg = compose(logo)
     OUT_FG.parent.mkdir(parents=True, exist_ok=True)
     fg.save(OUT_FG, "PNG")
+    mono = make_monochrome(fg)
+    mono_path = ROOT / "assets" / "source" / "adaptive-icon-monochrome.png"
+    mono.save(mono_path, "PNG")
 
     comp = composite(fg, bg)
     comp.save(PREV / "adaptive-composite.png")
     apply_mask(comp, circle_mask(CANVAS)).save(PREV / "circle.png")
     apply_mask(comp, squircle_mask(CANVAS)).save(PREV / "squircle.png")
     apply_mask(comp, roundrect_mask(CANVAS, int(CANVAS * 0.22))).save(PREV / "rounded-square.png")
+    apply_mask(comp, teardrop_mask(CANVAS)).save(PREV / "teardrop.png")
+    apply_mask(comp, square_mask(CANVAS)).save(PREV / "square.png")
     overlay_safe_zone(comp).save(PREV / "safe-zone-overlay.png")
     launcher(comp, 48).save(PREV / "launcher-48.png")
     launcher(comp, 192).save(PREV / "launcher-192.png")
+    write_legacy_mipmaps(comp)
+    write_adaptive_xml_templates()
     if old is not None:
         old_comp = composite(old, bg)
         launcher(old_comp, 48).save(PREV / "launcher-48-before.png")
@@ -220,6 +306,7 @@ def main():
         print(f"before_bbox_h={old_h} after_bbox_h={new_h} ratio={new_h/old_h:.2f}")
         print(f"before_frac_h={old_h/CANVAS:.3f} after_frac_h={new_h/CANVAS:.3f}")
     print("wrote", OUT_FG)
+    print("wrote", mono_path)
     print("previews", PREV)
 
 

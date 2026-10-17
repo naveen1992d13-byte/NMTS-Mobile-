@@ -61,9 +61,9 @@ if (app.includes('pickIncomingFromPush') && app.includes('IncomingRequestPopup')
   pass('PICK exact routing wired');
 } else fail('PICK routing missing');
 
-if (app.includes('snoozeIncomingAlert') && !read('src/components/IncomingRequestPopup.js').includes('skipNotification')) {
-  pass('popup SNOOZE is local dismiss only');
-} else fail('popup SNOOZE wired incorrectly');
+if (app.includes('rejectIncomingAlert') && read('src/components/IncomingRequestPopup.js').includes('onReject')) {
+  pass('popup REJECT wired to rejectIncomingAlert');
+} else fail('popup REJECT wiring missing');
 if (read('src/components/IncomingRequestPopup.js').includes('Skip') || read('src/components/IncomingRequestPopup.js').includes('SKIP')) {
   fail('popup includes Skip');
 } else pass('popup has no Skip');
@@ -73,9 +73,10 @@ if (
   read('src/components/IncomingRequestPopup.js').includes('Total Items') &&
   read('src/components/IncomingRequestPopup.js').includes('Total Quantity') &&
   read('src/components/IncomingRequestPopup.js').includes('PICK') &&
-  read('src/components/IncomingRequestPopup.js').includes('SNOOZE') &&
+  read('src/components/IncomingRequestPopup.js').includes('REJECT') &&
+  !read('src/components/IncomingRequestPopup.js').includes('SNOOZE') &&
   !read('src/components/IncomingRequestPopup.js').includes('SLA remaining')
-) pass('popup shows only required fields and Pick/Snooze');
+) pass('popup shows only required fields and Pick/Reject');
 else fail('popup fields/actions do not match requirement');
 if (
   requestAlert.includes('sleeping-stock-requests-v3') &&
@@ -151,10 +152,10 @@ if (ringing.includes('PARTIAL_WAKE_LOCK') && ringing.includes('MediaPlayer') && 
 if (read('src/services/nativeRequestAlert.js').includes('stopRinging') && app.includes('stopRinging(')) {
   pass('JS stopRinging bridge wired');
 } else fail('JS stopRinging bridge missing');
-if (app.includes('stopRinging(group.request_group_key') && app.includes('stopRinging(alert.request_group_key')) {
-  pass('existing Pick/Snooze handlers call stopRinging');
-} else fail('Pick/Snooze handlers missing stopRinging');
-if (expo.version === '1.4.5' && expo.android.versionCode === 27) pass('APK version is 1.4.5 / versionCode 27');
+if (app.includes('stopRinging(group.request_group_key') || app.includes('stopRinging(alert.request_group_key')) {
+  pass('Pick/Reject handlers call stopRinging');
+} else fail('Pick/Reject handlers missing stopRinging');
+if (expo.version === '1.5.0' && expo.android.versionCode === 32) pass('APK version is 1.5.0 / versionCode 32');
 else fail('android versionCode/version not bumped');
 if (app.includes('asOwnedPickedRequest(') && requestAlert.includes('export function asOwnedPickedRequest')) {
   pass('post-Pick selected request is forced to owned/editable');
@@ -227,12 +228,11 @@ else fail('theme tokens missing');
 const envJs = read('src/config/env.js');
 if (
   envJs.includes("https://testing.sleepingstock.in/api") &&
-  envJs.includes("https://api.sleepingstock.in/api") &&
-  envJs.includes('ALLOWED_API_BASE_URLS') &&
-  envJs.includes('MANUAL_PAIRING_API_BASE_URL = PRODUCTION_API_BASE_URL') &&
+  envJs.includes('ALLOWED_API_BASE_URLS = [TESTING_API_BASE_URL]') &&
+  envJs.includes('MANUAL_PAIRING_API_BASE_URL = TESTING_API_BASE_URL') &&
   !envJs.includes('PAIRING_SERVER_PRESETS')
-) pass('only official Testing/Production API URLs are allowed; manual OTP uses Production');
-else fail('pairing environment allowlist / manual Production URL missing');
+) pass('Testing APK allowlist points only at testing.sleepingstock.in');
+else fail('Testing API allowlist / manual Testing URL missing');
 
 const sessionJs = read('src/services/session.js');
 if (
@@ -259,19 +259,30 @@ else fail('login/pairing background crop/dim missing');
 
 if (
   expo.icon === './assets/icon.png' &&
-  expo.android.adaptiveIcon?.foregroundImage === './assets/adaptive-icon.png' &&
+  expo.android.adaptiveIcon?.foregroundImage === './assets/source/adaptive-icon-foreground-logo-only.png' &&
+  expo.android.adaptiveIcon?.backgroundImage === './assets/source/adaptive-icon-background.png' &&
+  expo.android.adaptiveIcon?.monochromeImage === './assets/source/adaptive-icon-monochrome.png' &&
   expo.splash?.image === './assets/splash-logo.png' &&
+  expo.name === 'Sleeping Stock' &&
   exists('assets/sleeping-stock-logo.png') &&
   exists('assets/splash-logo.png')
-) pass('launcher icon updated; existing in-app/splash logos unchanged');
+) pass('adaptive launcher layers + Sleeping Stock label wired');
 else fail('icon/logo wiring incorrect');
 
 const officialUploadedIcon = '/home/ec2-user/.cursor/projects/home-ec2-user-sleeping-stock-web/assets/1e5af237-7973-41dc-824f-04731d07c642.png';
-if (fs.existsSync(officialUploadedIcon) && sha('assets/icon.png') === crypto.createHash('sha256').update(fs.readFileSync(officialUploadedIcon)).digest('hex')) {
+if (
+  exists('assets/source/adaptive-icon-foreground-logo-only.png') &&
+  exists('assets/source/adaptive-icon-background.png') &&
+  exists('assets/source/adaptive-icon-monochrome.png') &&
+  exists('assets/source/previews/circle.png') &&
+  exists('assets/source/previews/teardrop.png')
+) {
+  pass('phase-3 adaptive launcher layers + mask previews present');
+} else if (fs.existsSync(officialUploadedIcon) && sha('assets/icon.png') === crypto.createHash('sha256').update(fs.readFileSync(officialUploadedIcon)).digest('hex')) {
   pass('uploaded launcher icon applied as app icon');
 } else if (!fs.existsSync(officialUploadedIcon)) {
   pass('skip uploaded icon hash (source asset not on this machine)');
-} else fail('app icon does not match the uploaded launcher icon');
+} else fail('adaptive launcher icon assets incomplete');
 
 if (!app.includes('PAIRING_SERVER_PRESETS') && !app.includes('Custom HTTPS URL')) {
   pass('manual pairing has no environment selector or custom URL field');

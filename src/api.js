@@ -165,7 +165,12 @@ export const logoutSession = () => request('post', '/mobile/session/logout');
 export const registerPushToken = (pushToken) => request('put', '/mobile/devices/push-token', { data: { push_token: pushToken } });
 export const getNotifications = () => request('get', '/mobile/notifications');
 export const acceptNotification = (requestGroupKey) => request('post', '/mobile/notifications/accept', { data: { request_group_key: requestGroupKey } });
+/** @deprecated Snooze removed — use rejectNotification. */
 export const skipNotification = (requestGroupKey) => request('post', '/mobile/notifications/skip', { data: { request_group_key: requestGroupKey } });
+export const rejectNotification = (requestGroupKey, reason) => request('post', '/mobile/notifications/reject', {
+  data: { request_group_key: requestGroupKey, reason: String(reason || '').trim() },
+});
+export const getTodayStockUploadStatus = () => request('get', '/mobile/stock/today-upload-status');
 export const submitPartResponse = (requestGroupKey, parts) => request('post', '/mobile/notifications/respond', {
   data: {
     request_group_key: requestGroupKey,

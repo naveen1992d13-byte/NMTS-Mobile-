@@ -15,7 +15,7 @@ import java.lang.ref.WeakReference
 class RequestAlertModule : Module() {
   override fun definition() = ModuleDefinition {
     Name("NativeRequestAlert")
-    Events("onPick", "onSnooze", "onIncomingAlert", "onRequestPicked")
+    Events("onPick", "onReject", "onSnooze", "onIncomingAlert", "onRequestPicked")
 
     OnCreate {
       instance = WeakReference(this@RequestAlertModule)
@@ -151,7 +151,10 @@ class RequestAlertModule : Module() {
 
     fun emitPick(payload: RequestAlertPayload) = emitOrQueue("onPick", payload)
 
-    fun emitSnooze(payload: RequestAlertPayload) = emitOrQueue("onSnooze", payload)
+    fun emitReject(payload: RequestAlertPayload) = emitOrQueue("onReject", payload)
+
+    /** @deprecated Snooze removed — no-op (does not emit). Prefer emitReject. */
+    fun emitSnooze(@Suppress("UNUSED_PARAMETER") payload: RequestAlertPayload) = Unit
 
     fun emitIncoming(payload: RequestAlertPayload) = emitOrQueue("onIncomingAlert", payload)
 

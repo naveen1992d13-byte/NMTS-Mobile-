@@ -19,11 +19,11 @@ import kotlin.concurrent.thread
 
 /**
  * Foreground media-playback service that loops the custom request sound
- * until Pick, Snooze, request_picked, or a server-status invalidation.
+ * until Pick, Reject, request_picked, or a server-status invalidation.
  * START_NOT_STICKY: the OS will not auto-restart a killed FGS. A persisted
  * alert is restored + validated if this service is created again.
  *
- * There is NO maximum ring duration. The mandatory 3rd alert rings until Pick.
+ * There is NO maximum ring duration. The alert rings until Pick or Reject.
  */
 class RequestAlertRingingService : Service() {
   private var mediaPlayer: MediaPlayer? = null
@@ -99,7 +99,7 @@ class RequestAlertRingingService : Service() {
   }
 
   override fun onTaskRemoved(rootIntent: Intent?) {
-    // Swiping the app must not stop the ring. Only Pick/Snooze/request_picked stop it.
+    // Swiping the app must not stop the ring. Only Pick/Reject/request_picked stop it.
   }
 
   override fun onDestroy() {
@@ -161,8 +161,8 @@ class RequestAlertRingingService : Service() {
     if (payload.canShowPick()) {
       builder.addAction(0, "Pick", actionPendingIntent(ACTION_PICK, payload, 11))
     }
-    if (payload.canShowSnooze()) {
-      builder.addAction(0, "Snooze", actionPendingIntent(ACTION_SNOOZE, payload, 12))
+    if (payload.canShowReject()) {
+      builder.addAction(0, "Reject", actionPendingIntent(ACTION_REJECT, payload, 12))
     }
     // Body tap only brings the app forward — it does NOT stop the ring or Pick the request.
     return builder.build()
@@ -267,6 +267,8 @@ class RequestAlertRingingService : Service() {
     const val CHANNEL_ID = "nmts-native-request-alert"
     const val NOTIFICATION_ID = 74101
     const val ACTION_PICK = "in.sleepingstock.mobile.requestalert.PICK"
+    const val ACTION_REJECT = "in.sleepingstock.mobile.requestalert.REJECT"
+    /** Kept for compatibility; Snooze UI/actions are removed. */
     const val ACTION_SNOOZE = "in.sleepingstock.mobile.requestalert.SNOOZE"
     const val ACTION_STOP = "in.sleepingstock.mobile.requestalert.STOP"
     private const val WAKE_LOCK_TAG = "nmts:request-alert"

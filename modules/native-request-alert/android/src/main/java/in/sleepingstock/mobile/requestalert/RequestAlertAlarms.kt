@@ -6,13 +6,18 @@ import android.content.Context
 import android.content.Intent
 
 /**
- * Local snooze/reminder PendingIntents are request-scoped. The server owns
- * SLA reminder rounds and Snooze re-alerts; this only cancels any local
- * AlarmManager work if one was scheduled for the request.
+ * Local snooze/reminder alarms are disabled. Cancel only — never schedule.
+ * Server owns SLA reminder rounds; native no longer re-alerts via AlarmManager.
  */
 internal object RequestAlertAlarms {
   private const val ACTION_LOCAL_SNOOZE = "in.sleepingstock.mobile.requestalert.LOCAL_SNOOZE"
   private const val ACTION_LOCAL_REMINDER = "in.sleepingstock.mobile.requestalert.LOCAL_REMINDER"
+
+  /** No-op: local snooze/reminder scheduling is not allowed. */
+  fun scheduleSnooze(@Suppress("UNUSED_PARAMETER") context: Context, @Suppress("UNUSED_PARAMETER") requestId: String) = Unit
+
+  /** No-op: local reminder scheduling is not allowed. */
+  fun scheduleReminder(@Suppress("UNUSED_PARAMETER") context: Context, @Suppress("UNUSED_PARAMETER") requestId: String) = Unit
 
   fun cancel(context: Context, requestId: String) {
     if (requestId.isBlank()) return

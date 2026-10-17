@@ -6,8 +6,12 @@ export const ANDROID_SOUND_NAME = ANDROID_SOUND_FILE;
 export const REQUEST_CATEGORY_ID = 'branch-request';
 export const ACTION_PICK_REQUEST = 'PICK';
 export const ACTION_OPEN_REQUEST = 'OPEN_REQUEST';
+export const ACTION_REJECT = 'REJECT';
+/** @deprecated Snooze removed — Pick/Reject only. Kept for stale payload detection. */
 export const ACTION_SNOOZE = 'SNOOZE';
 export const DEFAULT_NOTIFICATION_ACTION = 'expo.modules.notifications.actions.DEFAULT';
+export const CONFIRM_WINDOW_SECONDS = 50;
+export const ALREADY_PICKED_MESSAGE = 'This request was already picked by another dealer.';
 
 function stringifyField(value) {
   if (value == null) return '';
@@ -129,6 +133,7 @@ export function asOwnedPickedRequest(row, extra = {}) {
     can_edit: true,
     can_pick: false,
     can_snooze: false,
+    can_reject: false,
     can_transfer: true,
     can_release: true,
   };
@@ -159,11 +164,14 @@ export function buildIncomingAlert(data, session, group) {
     status,
     status_label: row.status_label || statusLabelFor(status),
     picked_by_name: row.picked_by_name || row.accepted_by_device_user_name || '',
-    skip_allowed: row.can_snooze != null ? Boolean(row.can_snooze) : row.skip_allowed !== false && status === 'pending',
+    skip_allowed: false,
     can_pick: row.can_pick != null ? Boolean(row.can_pick) : status === 'pending',
-    can_snooze: row.can_snooze != null ? Boolean(row.can_snooze) : row.skip_allowed !== false && status === 'pending',
+    can_snooze: false,
+    can_reject: row.can_reject != null ? Boolean(row.can_reject) : status === 'pending' && !row?.dealer_dismissed,
     can_edit: row.can_edit != null ? Boolean(row.can_edit) : Boolean(row.accepted_by_me) && status === 'picked',
     accepted_by_me: Boolean(row.accepted_by_me),
+    confirm_deadline_at: row.confirm_deadline_at || payload.confirm_deadline_at || null,
+    confirm_window_seconds: Number(row.confirm_window_seconds || payload.confirm_window_seconds || CONFIRM_WINDOW_SECONDS),
     type: payload.type || 'branch_request',
     group: row,
     data: payload,
@@ -205,10 +213,14 @@ export function canEditRequest(row) {
   return Boolean(row?.accepted_by_me) && requestStatus(row) === 'picked';
 }
 
-export function canSnoozeRequest(row) {
-  if (row?.can_snooze != null) return Boolean(row.can_snooze);
-  const skipCount = Number(row?.my_skip_count || 0);
-  return requestStatus(row) === 'pending' && skipCount < 2;
+export function canSnoozeRequest(_row) {
+  return false;
+}
+
+export function canRejectRequest(row) {
+  if (row?.dealer_dismissed) return false;
+  if (row?.can_reject != null) return Boolean(row.can_reject);
+  return requestStatus(row) === 'pending' && !row?.accepted_by_another;
 }
 
 export function canCompleteRequest(row) {
@@ -231,15 +243,30 @@ export function isSnoozeAction(actionIdentifier) {
   return id === ACTION_SNOOZE || id.endsWith(ACTION_SNOOZE);
 }
 
+export function isRejectAction(actionIdentifier) {
+  const id = String(actionIdentifier || '');
+  return id === ACTION_REJECT || id.endsWith(ACTION_REJECT);
+}
+
 export function isPickAction(actionIdentifier) {
   const id = String(actionIdentifier || '');
-  if (isSnoozeAction(id)) return false;
+  if (isSnoozeAction(id) || isRejectAction(id)) return false;
   return (
     id === ACTION_PICK_REQUEST ||
     id.endsWith(ACTION_PICK_REQUEST) ||
     id === ACTION_OPEN_REQUEST ||
     id.endsWith(ACTION_OPEN_REQUEST)
   );
+}
+
+export function confirmSecondsRemaining(deadlineOrSeconds, nowMs = Date.now()) {
+  if (deadlineOrSeconds == null || deadlineOrSeconds === '') return null;
+  if (typeof deadlineOrSeconds === 'number' && Number.isFinite(deadlineOrSeconds)) {
+    return Math.max(0, Math.floor(deadlineOrSeconds));
+  }
+  const parsed = Date.parse(String(deadlineOrSeconds));
+  if (Number.isNaN(parsed)) return null;
+  return Math.max(0, Math.floor((parsed - nowMs) / 1000));
 }
 
 export function shouldOpenExactRequest(actionIdentifier) {
