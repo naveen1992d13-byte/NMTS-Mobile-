@@ -65,38 +65,14 @@ function ensureAdaptiveXml(resDir) {
 }
 
 function copyLayerPngsIfNeeded(projectRoot, resDir) {
-  // Prefer Expo's adaptiveIcon generation; only fill gaps so XML drawables resolve.
-  const destDir = path.join(resDir, FALLBACK_MIPMAP);
-  for (const layer of LAYER_SOURCES) {
-    const srcPath = path.join(projectRoot, layer.src);
-    const destPath = path.join(destDir, layer.name);
-    if (!fs.existsSync(srcPath)) {
-      continue;
-    }
-    if (fs.existsSync(destPath)) {
-      continue;
-    }
-    fs.mkdirSync(destDir, { recursive: true });
-    fs.copyFileSync(srcPath, destPath);
-  }
-
-  // Sync pre-sized legacy launcher icons when present.
-  const legacyRoot = path.join(projectRoot, 'assets', 'source', 'legacy-launcher');
-  if (!fs.existsSync(legacyRoot)) {
-    return;
-  }
-  for (const folder of fs.readdirSync(legacyRoot)) {
-    const srcDir = path.join(legacyRoot, folder);
-    if (!fs.statSync(srcDir).isDirectory() || !folder.startsWith('mipmap-')) {
-      continue;
-    }
-    const dest = path.join(resDir, folder);
-    fs.mkdirSync(dest, { recursive: true });
-    for (const file of fs.readdirSync(srcDir)) {
-      if (!file.endsWith('.png')) continue;
-      fs.copyFileSync(path.join(srcDir, file), path.join(dest, file));
-    }
-  }
+  // Expo already emits webp adaptive layers from app.json adaptiveIcon.
+  // Never copy PNG siblings for the same resource name — AAPT fails on
+  // duplicate ic_launcher_foreground.png + .webp in the same mipmap folder.
+  // Only ensure XML + color exist; layer bitmaps come from Expo prebuild.
+  void projectRoot;
+  void resDir;
+  void LAYER_SOURCES;
+  void FALLBACK_MIPMAP;
 }
 
 function withAdaptiveLauncherIcon(config) {
