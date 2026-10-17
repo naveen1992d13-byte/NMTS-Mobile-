@@ -168,18 +168,23 @@ def square_mask(size):
 
 
 def teardrop_mask(size):
-    """Common OEM teardrop: circle with a flattened/rounded bottom-right corner."""
+    """OEM-style teardrop: circle with a pointed bottom-right lobe (no hard triangle cut)."""
     m = Image.new("L", (size, size), 0)
-    draw = ImageDraw.Draw(m)
-    draw.ellipse((0, 0, size - 1, size - 1), fill=255)
-    # Flatten lower-right into a soft cut (teardrop-ish).
-    cut = int(size * 0.28)
-    draw.polygon(
-        [(size - 1, size // 2), (size - 1, size - 1), (size // 2, size - 1), (size - cut, size - cut)],
-        fill=0,
-    )
-    # Soften with a rounded corner fill back for a teardrop lobe.
-    draw.pieslice((size - cut * 2, size - cut * 2, size - 1, size - 1), 0, 90, fill=255)
+    px = m.load()
+    c = (size - 1) / 2.0
+    r = c
+    # Tip sits slightly outside the circle on the lower-right diagonal.
+    tip_x = c + r * 0.92
+    tip_y = c + r * 0.92
+    for y in range(size):
+        for x in range(size):
+            in_circle = (x - c) ** 2 + (y - c) ** 2 <= r * r
+            # Soft lobe: points near the tip that stay inside a rounded cone from center.
+            dx, dy = x - c, y - c
+            toward_tip = dx + dy > 0
+            lobe = toward_tip and ((x - tip_x) ** 2 + (y - tip_y) ** 2) <= (r * 0.55) ** 2
+            if in_circle or lobe:
+                px[x, y] = 255
     return m
 
 
