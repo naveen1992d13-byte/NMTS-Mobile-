@@ -7,8 +7,15 @@ This repo is the **Sleeping Stock Mobile** app — an Expo / React Native
 backend (see the `sleeping-stock-web` repo). Entry point is `App.js`; API client
 and services live under `src/`.
 
-`node_modules` are installed by the Cursor Cloud update script (`npm install`;
-note `.npmrc` sets `legacy-peer-deps=true`).
+Cloud Agent install is `npm ci`. It honors `package-lock.json` and `.npmrc`
+(`legacy-peer-deps=true`). Running it again replaces `node_modules` and is safe.
+
+Metro does not start on boot: this VM has no Android emulator, and Expo Go
+cannot load the native modules. When a bundler is needed, start it with
+`CI=1 npx expo start --dev-client --port 8081`. The `--non-interactive` flag
+is rejected; `CI=1` is what keeps Expo from prompting. `http://127.0.0.1:8081/status`
+returns `packager-status:running`, and
+`/node_modules/expo/AppEntry.bundle?platform=android&dev=true` serves the app bundle.
 
 ### What can and cannot run headless
 
